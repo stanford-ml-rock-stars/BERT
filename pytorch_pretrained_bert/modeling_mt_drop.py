@@ -1248,6 +1248,7 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
         self.classification_1 = nn.Linear(config.hidden_size*self.max_seq_length, 64)   ## Added linear layer for digit classification
         self.relu = nn.ReLU()                                                           ## Added Relu for digit classification
         self.classification_2 = nn.Linear(64, 10)                                       ## Added second linear layer
+        #self.numbers_weights = torch.tensor([0.5,2,2,2,2,2,2,2,2,0.5])                 ## weights for number CrossEntropy
 
     def forward(self, input_ids, token_type_ids=None, attention_mask=None, start_positions=None, end_positions=None, numbers=None):     ## added numbers
         sequence_output, _ = self.bert(input_ids, token_type_ids, attention_mask, output_all_encoded_layers=False)
@@ -1285,15 +1286,16 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
             numbers.clamp_(0,9)                                                 ## Added to avoid cuda RuntimeError
 
             loss_fct_1 = CrossEntropyLoss(ignore_index=ignored_index)
+            #loss_fct_2 = CrossEntropyLoss(weight=self.numbers_weights)         ## Added loss function
             loss_fct_2 = CrossEntropyLoss()                                     ## Added loss function
             start_loss = loss_fct_1(start_logits, start_positions)
             end_loss = loss_fct_1(end_logits, end_positions)
             classification_loss = loss_fct_2(class_logits, numbers)             ## Added classification loss
 
-            hits = torch.eq(number_preds, numbers).float()                      ## added hits
-            accuracy = torch.mean(hits)                                         ## Added accuracy
+            #hits = torch.eq(number_preds, numbers).float()                     ## added hits
+            #accuracy = torch.mean(hits)                                        ## Added accuracy
 
-            total_loss = (start_loss + end_loss + classification_loss*6) / 3    ## Added classification_loss and changed denominator to 3
+            total_loss = (start_loss + end_loss + classification_loss*5) / 3    ## Added classification_loss and changed denominator to 3
             return total_loss #, classification_loss, accuracy                  ## Added all (except total_loss)                                      ## Added accuracy
         else:
             return start_logits, end_logits, number_preds                       ## added number_preds

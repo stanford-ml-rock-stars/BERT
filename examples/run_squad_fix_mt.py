@@ -217,12 +217,16 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
         query_tokens = tokenizer.tokenize(example.question_text)
         #print(example.orig_answer_text)                                        ## added
         try:                                                                    ## added try except block
-            number = float(example.orig_answer_text)
+            number = abs(float(example.orig_answer_text))                       ## absolute to avoid bad numbers (just 2 examples)!
             if number > 9:
                 number = 9
         except (ValueError, TypeError):
             number = 0
         #print("number: ", number)                                              ## added print
+
+        targets = [0,1,2,3,4,5,6,7,8,9]                                         ## added
+        if number not in targets:                                               ## added
+            continue                                                            ## exclude weird number answers
 
         if len(query_tokens) > max_query_length:
             query_tokens = query_tokens[0:max_query_length]
@@ -968,9 +972,14 @@ def main():
         all_segment_ids = torch.tensor([f.segment_ids for f in train_features], dtype=torch.long)
         all_start_positions = torch.tensor([f.start_position for f in train_features], dtype=torch.long)
         all_end_positions = torch.tensor([f.end_position for f in train_features], dtype=torch.long)
-        all_numbers = torch.tensor([f.number for f in train_features], dtype=torch.long)                    ## added number tensor long
+        all_numbers = torch.tensor([f.number for f in train_features], dtype=torch.long)                         ## added number tensor long
         train_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids,
-                                   all_start_positions, all_end_positions, all_numbers)                     ## added all_numbers
+                                   all_start_positions, all_end_positions, all_numbers)                          ## added all_numbers
+
+        #print("saving feature_check...")                                                                        ## added print
+        #feature_check = np.column_stack((all_start_positions, all_end_positions, all_numbers))                  ## Added
+        #np.savetxt('feature_check', feature_check)                                                              ## added for detecting bad numbers
+
         if args.local_rank == -1:
             train_sampler = RandomSampler(train_data)
         else:
@@ -1090,7 +1099,7 @@ def main():
             input_file=args.predict_file, is_training=False, version_2_with_negative=args.version_2_with_negative)
 
         ## Here you could truncate the dev set to have a toy set for debugging:
-        #eval_examples = eval_examples[:10]                                                             ## Reduce number of dev examples to ????
+        #eval_examples = eval_examples[:100]                                                             ## Reduce number of dev examples to ????
         #print('only 100 examples for evaluation')
 
         eval_features = convert_examples_to_features(
