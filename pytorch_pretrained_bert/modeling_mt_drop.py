@@ -1292,6 +1292,6 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
             accuracy = torch.mean(hits)                                         ## Added accuracy
 
             total_loss = (start_loss + end_loss + classification_loss*6) / 3    ## Added classification_loss and changed denominator to 3
-            return total_loss, classification_loss, accuracy                    ## Added all (except total_loss)                                      ## Added accuracy
+            return total_loss #, classification_loss, accuracy                  ## Added all (except total_loss)                                      ## Added accuracy
         else:
             return start_logits, end_logits, number_preds                       ## added number_preds

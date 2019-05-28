@@ -1027,20 +1027,20 @@ def main():
 
         model.train()
 
-        losses = []                                                                                    ## Added for "Tensorboard"
-        classification_losses = []                                                                     ## Added for "Tensorboard"
-        accuracies = []                                                                                ## Added for "Tensorboard"
+        #losses = []                                                                                    ## Added for "Tensorboard"
+        #classification_losses = []                                                                     ## Added for "Tensorboard"
+        #accuracies = []                                                                                ## Added for "Tensorboard"
 
         for _ in trange(int(args.num_train_epochs), desc="Epoch"):
             for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])):
                 if n_gpu == 1:
                     batch = tuple(t.to(device) for t in batch) # multi-gpu does scattering it-self
                 input_ids, input_mask, segment_ids, start_positions, end_positions, numbers = batch     ## added numbers
-                loss, classification_loss, accuracy = model(input_ids, segment_ids, input_mask, start_positions, end_positions, numbers)    ## added numbers and outputs
+                loss = model(input_ids, segment_ids, input_mask, start_positions, end_positions, numbers)    ## added numbers and outputs
 
-                losses.append(loss.item())                                                             ## Added
-                classification_losses.append(classification_loss.item())                               ## Added
-                accuracies.append(accuracy.item())                                                     ## Added
+                #losses.append(loss.item())                                                             ## Added
+                #classification_losses.append(classification_loss.item())                               ## Added
+                #accuracies.append(accuracy.item())                                                     ## Added
 
                 if n_gpu > 1:
                     loss = loss.mean() # mean() to average on multi-gpu.
@@ -1062,8 +1062,8 @@ def main():
                     optimizer.zero_grad()
                     global_step += 1
 
-            data = np.column_stack((losses, classification_losses, accuracies))         ## Added
-            np.savetxt('mt_basic_indicators.out', data)                                 ## Added for graphs
+            #data = np.column_stack((losses, classification_losses, accuracies))         ## Added
+            #np.savetxt('mt_basic_indicators.out', data)                                 ## Added for graphs
 
     if args.do_train and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
         # Save a trained model, configuration and tokenizer
