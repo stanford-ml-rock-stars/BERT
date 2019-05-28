@@ -1282,6 +1282,8 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
             start_positions.clamp_(0, ignored_index)
             end_positions.clamp_(0, ignored_index)
 
+            numbers.clamp_(0,9)                                                 ## Added to avoid cuda RuntimeError
+
             loss_fct_1 = CrossEntropyLoss(ignore_index=ignored_index)
             loss_fct_2 = CrossEntropyLoss()                                     ## Added loss function
             start_loss = loss_fct_1(start_logits, start_positions)
