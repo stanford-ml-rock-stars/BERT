@@ -1,4 +1,5 @@
 import json
+from typing import Dict, List, Union, Tuple, Any
 ## from reading_comprehension.data.drop_reader import DROPReader
 ## BA outcomment above and new line below:
 from drop_reader_for_bert import DROPReader                                     ## changed name
@@ -44,30 +45,26 @@ def convert(drop_data_path,
             answers = {}
 
             answer_type = metadata["answer_type"]
+
             if answer_type == "spans":
-                gold_answer_text = metadata["span_answer_texts"][0]
-                passage_answer_spans = metadata["valid_passage_spans"]
-            token_offsets = metadata["passage_token_offsets"]
-            for span in answer_spans:
-                if span == (-1, -1):                                        ## added
-                    answer_start = -1                                       ## added
-                    answer_end = -1                                         ## added
-                    metadata["is_impossible"] = True                        ## added
-                else:                                                       ## added
-                    answer_start = token_offsets[span[0]][0]                ## indent
-                    answer_end = token_offsets[span[1]][1]                  ## indent
-                if use_matched_span_as_answer_text:
-                    answer_text = paragraph_text[answer_start: answer_end]
-                else:
-                    answer_text = gold_answer_text
-                answers.append({"answer_start": answer_start,
-                                "text": answer_text})
-                # print(paragraph_text[answer_start: answer_start + len(answer_text)])
-                # print(answer_text)
+                span_answer_texts = metadata["span_answer_texts"]
+                passage_spans = metadata["valid_passage_spans"]
+                question_spans = metadata["valid_question_spans"]
+                passage_token_offsets = metadata["passage_token_offsets"]
+                question_token_offsets = metadata["question_token_offsets"]
+
+                question_converted_result = convert_span_answers(question_token_offsets, question_spans, span_answer_texts, single_span=True)
+                passage_converted_result = convert_span_answers(passage_token_offsets, passage_spans, span_answer_texts, single_span=True)
+
+                answers["spans"] = {
+                    "question_spans": question_converted_result,
+                    "passage_spans": passage_converted_result
+                }
+
             qas.append({"id": metadata["question_id"],
                         "question": metadata["original_question"],
-                        "answers": [answers[0]],
-                        "is_impossible": metadata["is_impossible"]})        ## added
+                        "answers": answers,
+                        "answer_type": answer_type})
         new_passage = {"title": passage_id,
                        "paragraphs": [{"context": paragraph_text,
                                        "qas": qas}]}
@@ -77,6 +74,25 @@ def convert(drop_data_path,
         squad_style_data = {"data": squad_style_data, "version": "drop-1.0"}
         json.dump(squad_style_data, fout)
 
+def convert_span_answers(token_offsets: List[Tuple[int, int]],
+                             answer_spans: List[Tuple[int, int]],
+                             answer_texts: List[str],
+                             single_span: bool):
+    answers = []
+    for idx, span in enumerate(answer_spans):
+        if span == (-1, -1):
+            answer_start = -1
+            answer_end = -1
+        else:
+            answer_start = token_offsets[span[0]][0]
+            answer_end = token_offsets[span[1]][1]
+        answers.append({
+            "answer_start": answer_start[idx],
+            "text": answer_texts
+        })
+        if single_span:
+            break
+    return answers
 
 def main():
     convert("../DATA/drop_dataset_train.json",
