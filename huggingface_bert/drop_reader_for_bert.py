@@ -124,7 +124,7 @@ class DROPReader(DatasetReader):
                 else:
                     skip_count += 1
             # ======================================= REMOVE =====================================================
-            if len(instances) > 1000:
+            if len(instances) > 15:
                 break
         # pylint: disable=logging-fstring-interpolation
         logger.info(f"Skipped {skip_count} questions, kept {len(instances)} questions.")
@@ -158,6 +158,10 @@ class DROPReader(DatasetReader):
             # We only use the first annotated answer here because we only care about answers in the training set.
             answer_type, answer_texts = self.extract_answer_info_from_annotation(answer_annotations[0])
 
+        if not answer_texts:
+            # For some reason the all answer fields are empty. We stop processing.
+            return None
+
         # Tokenize the answer text in order to find the matched span based on token
         # Basically the following code splits hypen connected words
         tokenized_answer_texts = []
@@ -189,19 +193,23 @@ class DROPReader(DatasetReader):
             metadata['question_token_offsets'] = question_offsets
             metadata['valid_passage_spans'] = valid_passage_spans
             metadata['valid_question_spans'] = valid_question_spans
-            # TODO: remove the if
-            if answer_texts:
-                metadata['span_answer_texts'] = answer_texts
 
             # ----------- counting ---------------
-            target_numbers = []
-            # `answer_texts` is a list of valid answers.
+            numbers_in_answer_texts = []
+            # Put all the numbers that appear in the answer texts in a list
+            # This list is created on ALL types of answers (date, number, spans). It is up to the convert scrip to decide which to use.
+            # For number type of answers, the list should only contain one entry.
             for answer_text in answer_texts:
-                number = self.convert_word_to_number(answer_text)
+                number = self.convert_word_to_number(answer_text, try_to_include_more_numbers=False)
                 if number is not None:
-                    target_numbers.append(number)
+                    numbers_in_answer_texts.append(number)
 
-            metadata["number_answer_text"] = answer_texts
+            # Filter the counting numbers
+            # Currently we only support count number 0 ~ 9
+            numbers_for_count = list(range(10))
+            valid_counts = self.find_valid_counts(numbers_for_count, numbers_in_answer_texts)
+
+            metadata["counting"] = valid_counts
 
             # ----------- date ---------------
             # TO be continued..

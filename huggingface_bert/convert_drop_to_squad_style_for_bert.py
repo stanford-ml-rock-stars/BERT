@@ -23,17 +23,19 @@ def convert(drop_data_path,
     skipped_instances = 0
     instances_grouped_by_passage = {}
     for instance in instances:
+        if instance is None:
+            skipped_instances += 1
+            # drop the instance
+            continue
+
+        instance_count += 1
         passage_id = instance.fields["metadata"].metadata["passage_id"]
 
-        if "span_answer_texts" in instance.fields["metadata"].metadata:
-            if passage_id in instances_grouped_by_passage:
-                instances_grouped_by_passage[passage_id].append(instance)
-            else:
-                instances_grouped_by_passage[passage_id] = [instance]
-            instance_count += 1
-        # drop the instance that does not have an answer.
+        if passage_id in instances_grouped_by_passage:
+            instances_grouped_by_passage[passage_id].append(instance)
         else:
-            skipped_instances += 1
+            instances_grouped_by_passage[passage_id] = [instance]
+
     print('skipped instances and total instances afterwards: ', skipped_instances, instance_count)  ## added print and counters above
 
     squad_style_data = []
@@ -45,23 +47,36 @@ def convert(drop_data_path,
             answers = {}
 
             answer_type = metadata["answer_type"]
+            # ---------------- counting --------------------------
+            # We only put the count answer if the answer type if "number"
+            answers["counting"] = []
+            if answer_type == "number":
+                # there might be multiple entries for count answer. Therefore the length is not fixed.
+                # can be empty if the count is outside 0~9
+                answers["counting"] = metadata["counting"]
+            if not answers["counting"]:
+                answers["counting"] = [-1]
 
-            if answer_type == "spans":
-                span_answer_texts = metadata["span_answer_texts"]
-                passage_spans = metadata["valid_passage_spans"]
-                question_spans = metadata["valid_question_spans"]
-                passage_token_offsets = metadata["passage_token_offsets"]
-                question_token_offsets = metadata["question_token_offsets"]
+            # ---------------- spans --------------------------
+            passage_spans = metadata["valid_passage_spans"]
+            question_spans = metadata["valid_question_spans"]
+            passage_token_offsets = metadata["passage_token_offsets"]
+            question_token_offsets = metadata["question_token_offsets"]
 
-                question_converted_result = convert_span_answers(question_token_offsets, question_spans, span_answer_texts, single_span=True)
-                passage_converted_result = convert_span_answers(passage_token_offsets, passage_spans, span_answer_texts, single_span=True)
+            question_converted_result = convert_span_answers(question_token_offsets, question_spans, single_span=True)
+            passage_converted_result = convert_span_answers(passage_token_offsets, passage_spans, single_span=True)
 
-                answers["spans"] = {
-                    "question_spans": question_converted_result,
-                    "passage_spans": passage_converted_result
-                }
-            elif answer_type == "number":
-                answers["number"] = metadata["number_answer_text"]
+            answers["spans"] = {
+                "question_spans": question_converted_result,
+                "passage_spans": passage_converted_result
+            }
+
+
+            # ---------------- arithmatics --------------------------
+            # TODO:
+
+            # ---------------- date -------------------------
+            # TODO:
 
             qas.append({"id": metadata["question_id"],
                         "question": metadata["original_question"],
@@ -78,7 +93,6 @@ def convert(drop_data_path,
 
 def convert_span_answers(token_offsets: List[Tuple[int, int]],
                              answer_spans: List[Tuple[int, int]],
-                             answer_texts: List[str],
                              single_span: bool):
     answers = []
     for idx, span in enumerate(answer_spans):
@@ -90,7 +104,7 @@ def convert_span_answers(token_offsets: List[Tuple[int, int]],
             answer_end = token_offsets[span[1]][1]
         answers.append({
             "answer_start": answer_start,
-            "text": answer_texts
+            "answer_end": answer_end
         })
         if single_span:
             break
