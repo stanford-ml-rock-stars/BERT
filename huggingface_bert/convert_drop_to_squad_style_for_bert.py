@@ -1,4 +1,5 @@
 import json
+from typing import Dict, List, Union, Tuple, Any
 ## from reading_comprehension.data.drop_reader import DROPReader
 ## BA outcomment above and new line below:
 from drop_reader_for_bert import DROPReader                                     ## changed name
@@ -6,7 +7,21 @@ from drop_reader_for_bert import DROPReader                                     
 ## BA insert:
 # drop_data_path='/Users/ba/Downloads/cs230/project/drop_dataset/drop_dataset_train.json'
 
-
+"""
+qas:
+    id:
+    question:
+    answers:
+        counting: List[int]
+        spans:
+            question_spans: List
+                answer_start
+                answer_end
+            passage_spans: List
+                answer_start
+                answer_end
+    answer_type:
+"""
 def convert(drop_data_path,
             squad_style_output_path,
             skip_invalid,
@@ -18,21 +33,22 @@ def convert(drop_data_path,
     instances = reader.read(drop_data_path)
     print(f"Totally {len(list(instances))} instances")
 
-    #instances = instances[:1000]      ## test
-    #print(instances)                ## test
     instance_count = 0
     skipped_instances = 0
     instances_grouped_by_passage = {}
     for instance in instances:
+        if instance is None:
+            skipped_instances += 1
+            continue
+
+        instance_count += 1
         passage_id = instance.fields["metadata"].metadata["passage_id"]
 
-        if "answer_texts" in instance.fields["metadata"].metadata:
-            if passage_id in instances_grouped_by_passage:
-                instances_grouped_by_passage[passage_id].append(instance)
-            else:
-                instances_grouped_by_passage[passage_id] = [instance]
-            instance_count += 1
-        else: skipped_instances += 1
+        if passage_id in instances_grouped_by_passage:
+            instances_grouped_by_passage[passage_id].append(instance)
+        else:
+            instances_grouped_by_passage[passage_id] = [instance]
+
     print('skipped instances and total instances afterwards: ', skipped_instances, instance_count)  ## added print and counters above
 
     squad_style_data = []
@@ -41,45 +57,75 @@ def convert(drop_data_path,
         qas = []
         for instance in instances:
             metadata = instance.fields["metadata"].metadata
-            gold_answer_text = metadata["answer_texts"][0]
-            answer_spans = metadata["valid_passage_spans"]
-            token_offsets = metadata["token_offsets"]
-            answers = []
-            for span in answer_spans:
+            answers = {}
 
-                if span == (-1,-1):                                         ## added
-                    answer_start = -1                                       ## added
-                    answer_end = -1                                         ## added
-                    metadata["is_impossible"] = True                        ## added
-                else:                                                       ## added
+            answer_type = metadata["answer_type"]
+            # ---------------- counting --------------------------
+            # We only put the count answer if the answer type if "number"
+            answers["counting"] = []
+            if answer_type == "number":
+                # there might be multiple entries for count answer. Therefore the length is not fixed.
+                # can be empty if the count is outside 0~9
+                answers["counting"] = metadata["counting"]
+            if not answers["counting"]:
+                answers["counting"] = [-1]
 
-                    answer_start = token_offsets[span[0]][0]                ## indent
-                    answer_end = token_offsets[span[1]][1]                  ## indent
-                if use_matched_span_as_answer_text:
-                    answer_text = paragraph_text[answer_start: answer_end]
-                else:
-                    answer_text = gold_answer_text
-                answers.append({"answer_start": answer_start,
-                                "text": answer_text})
-                # print(paragraph_text[answer_start: answer_start + len(answer_text)])
-                # print(answer_text)
+            # ---------------- spans --------------------------
+            passage_spans = metadata["valid_passage_spans"]
+            question_spans = metadata["valid_question_spans"]
+            passage_token_offsets = metadata["passage_token_offsets"]
+            question_token_offsets = metadata["question_token_offsets"]
+
+            question_converted_result = convert_span_answers(question_token_offsets, question_spans, single_span=True)
+            passage_converted_result = convert_span_answers(passage_token_offsets, passage_spans, single_span=True)
+
+            answers["spans"] = {
+                "question_spans": question_converted_result,
+                "passage_spans": passage_converted_result
+            }
+
+
+            # ---------------- arithmatics --------------------------
+            # TODO:
+
+            # ---------------- date -------------------------
+            # TODO:
+
             qas.append({"id": metadata["question_id"],
                         "question": metadata["original_question"],
-                        "answers": [answers[0]],
-                        "is_impossible": metadata["is_impossible"]})        ## added
+                        "answers": answers,
+                        "answer_type": answer_type})
         new_passage = {"title": passage_id,
                        "paragraphs": [{"context": paragraph_text,
                                        "qas": qas}]}
         squad_style_data.append(new_passage)
-    print(len(squad_style_data))                                                ## added print
+    print('There are', len(squad_style_data), "passages in total")
     with open(squad_style_output_path, "w") as fout:
         squad_style_data = {"data": squad_style_data, "version": "drop-1.0"}
         json.dump(squad_style_data, fout)
 
+def convert_span_answers(token_offsets: List[Tuple[int, int]],
+                             answer_spans: List[Tuple[int, int]],
+                             single_span: bool):
+    answers = []
+    for idx, span in enumerate(answer_spans):
+        if span == (-1, -1):
+            answer_start = -1
+            answer_end = -1
+        else:
+            answer_start = token_offsets[span[0]][0]
+            answer_end = token_offsets[span[1]][1]
+        answers.append({
+            "answer_start": answer_start,
+            "answer_end": answer_end
+        })
+        if single_span:
+            break
+    return answers
 
 def main():
-    convert("drop_train.json",
-            "drop_squad_style_train_all.json",          ## changed name for all examples
+    convert("../DATA/drop_dataset_train.json",
+            "drop_squad_style_train_all_test.json",          ## changed name for all examples
             skip_invalid=False,                         ## changed to False
             use_matched_span_as_answer_text=False)      ## changed to False
 

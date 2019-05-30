@@ -3,7 +3,7 @@ import logging
 import itertools
 import string
 from typing import Dict, List, Union, Tuple, Any
-from collections import defaultdict
+from collections import Counter, defaultdict
 from overrides import overrides
 from allennlp.common.file_utils import cached_path
 from allennlp.data.dataset_readers.dataset_reader import DatasetReader
@@ -148,22 +148,21 @@ class DROPReader(DatasetReader):
         if self.question_length_limit is not None:
             question_tokens = question_tokens[: self.question_length_limit]
 
-        answer_type, answer_texts = None, []
+        answer_type: str = None
+        answer_texts: List[str] = []
         if answer_annotations:
-            # Currently, we only have multiple annotations for the dev and test set.
-            for answer_annotation in answer_annotations:
-                type_info, text_info = self.extract_answer_info_from_annotation(answer_annotation)
-                if type_info is not None:
-                    # use the last valid type as the gold type
-                    answer_type = type_info
-                    if self.relaxed_span_match_for_finding_labels:
-                        # If one annotation has multiple spans, treat all spans as correct.
-                        # Using this will make it easier to find matching spans in the passage.
-                        answer_texts += text_info
-                    else:
-                        answer_texts.append(' '.join(text_info))
+            # Currently, we only have multiple annotations for the dev and test set due to the fact that dev and test sets have "validated answers".
+            # We only use the first annotated answer here because we only care about answers in the training set.
+            answer_type, answer_texts = self.extract_answer_info_from_annotation(answer_annotations[0])
+
+        if not answer_texts:
+            print(passage_id)
+            print(question_id)
+            # For some reason the all answer fields are empty. We stop processing.
+            return None
 
         # Tokenize the answer text in order to find the matched span based on token
+        # Basically the following code splits hypen connected words
         tokenized_answer_texts = []
         for answer_text in answer_texts:
             answer_tokens = self._tokenizer.tokenize(answer_text)
@@ -171,30 +170,58 @@ class DROPReader(DatasetReader):
             tokenized_answer_texts.append(' '.join(token.text for token in answer_tokens))
 
         if self.instance_format == "squad":
-            valid_passage_spans = \
-                self.find_valid_spans(passage_tokens, tokenized_answer_texts) if tokenized_answer_texts else []
+            metadata = {}
 
+            # TODO: turn into functions
+            # ----------- spans ---------------
+            valid_passage_spans = self.find_valid_spans(passage_tokens, tokenized_answer_texts) if tokenized_answer_texts else []
+            valid_question_spans = self.find_valid_spans(question_tokens, tokenized_answer_texts) if tokenized_answer_texts else []
             if not valid_passage_spans:
-                if "passage_span" in self.skip_when_all_empty:
-                    return None
-                else:
-                    #valid_passage_spans.append((len(passage_tokens) - 1, len(passage_tokens) - 1))         ## exchanged
-                    valid_passage_spans.append((-1, -1))                                                      ## added/changed
-            return make_reading_comprehension_instance(question_tokens,
-                                                       passage_tokens,
-                                                       self._token_indexers,
-                                                       passage_text,
-                                                       valid_passage_spans,
-                                                       # this `answer_texts` will not be used for evaluation
-                                                       answer_texts,
-                                                       additional_metadata={
-                                                               "original_passage": passage_text,
-                                                               "original_question": question_text,
-                                                               "passage_id": passage_id,
-                                                               "question_id": question_id,
-                                                               "valid_passage_spans": valid_passage_spans,
-                                                               "is_impossible": False,                           ## added
-                                                               "answer_annotations": answer_annotations})
+                valid_passage_spans.append((-1, -1))
+            if not valid_question_spans:
+                valid_question_spans.append((-1, -1))
+
+            # the [start, end) index of each token
+            passage_offsets = [(token.idx, token.idx + len(token.text)) for token in passage_tokens]
+            question_offsets = [(token.idx, token.idx + len(token.text)) for token in question_tokens]
+
+            metadata['passage_token_offsets'] = passage_offsets
+            metadata['question_token_offsets'] = question_offsets
+            metadata['valid_passage_spans'] = valid_passage_spans
+            metadata['valid_question_spans'] = valid_question_spans
+
+            # ----------- counting ---------------
+            numbers_in_answer_texts = []
+            # Put all the numbers that appear in the answer texts in a list
+            # This list is created on ALL types of answers (date, number, spans). It is up to the convert scrip to decide which to use.
+            # For number type of answers, the list should only contain one entry.
+            for answer_text in answer_texts:
+                number = self.convert_word_to_number(answer_text, try_to_include_more_numbers=False)
+                if number is not None:
+                    numbers_in_answer_texts.append(number)
+
+            # Filter the counting numbers
+            # Currently we only support count number 0 ~ 9
+            numbers_for_count = list(range(10))
+            valid_counts = self.find_valid_counts(numbers_for_count, numbers_in_answer_texts)
+
+            metadata["counting"] = valid_counts
+
+            # ----------- date ---------------
+            # TO be continued..
+            common_metadata = {
+                "answer_type": answer_type,
+                "original_answer_texts": answer_texts,
+                "original_passage": passage_text,
+                "original_question": question_text,
+                "passage_id": passage_id,
+                "question_id": question_id
+            }
+            metadata.update(common_metadata)
+            fields: Dict[str, Field] = {}
+            fields['metadata'] = MetadataField(metadata)
+            return Instance(fields)
+        # ------------------------- NOT USED BELOW ----------------------------------------------------------
         elif self.instance_format == "bert":
             question_concat_passage_tokens = question_tokens + [Token("[SEP]")] + passage_tokens
             valid_passage_spans = []
@@ -454,6 +481,9 @@ class DROPReader(DatasetReader):
                     number = None
             return number
 
+    """
+    for every answer in answer_texts, find **ALL** the matching spans for that answer.
+    """
     @staticmethod
     def find_valid_spans(passage_tokens: List[Token],
                          answer_texts: List[str]) -> List[Tuple[int, int]]:
@@ -463,11 +493,13 @@ class DROPReader(DatasetReader):
             word_positions[token].append(i)
         spans = []
         for answer_text in answer_texts:
-            answer_tokens = answer_text.lower().strip(STRIPPED_CHARACTERS).split()
+            answer_tokens = answer_text.lower().split()
+            answer_tokens = [token.strip(STRIPPED_CHARACTERS) for token in answer_tokens]
             num_answer_tokens = len(answer_tokens)
             if answer_tokens[0] not in word_positions:
                 continue
 
+            # Note this will do the matching at every position of the first answer token
             for span_start in word_positions[answer_tokens[0]]:
                 span_end = span_start  # span_end is _inclusive_
                 answer_index = 1
