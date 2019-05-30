@@ -123,9 +123,6 @@ class DROPReader(DatasetReader):
                     instances.append(instance)
                 else:
                     skip_count += 1
-            # ======================================= REMOVE =====================================================
-            if len(instances) > 15:
-                break
         # pylint: disable=logging-fstring-interpolation
         logger.info(f"Skipped {skip_count} questions, kept {len(instances)} questions.")
         return instances
@@ -159,6 +156,8 @@ class DROPReader(DatasetReader):
             answer_type, answer_texts = self.extract_answer_info_from_annotation(answer_annotations[0])
 
         if not answer_texts:
+            print(passage_id)
+            print(question_id)
             # For some reason the all answer fields are empty. We stop processing.
             return None
 
@@ -171,9 +170,6 @@ class DROPReader(DatasetReader):
             tokenized_answer_texts.append(' '.join(token.text for token in answer_tokens))
 
         if self.instance_format == "squad":
-            if not answer_texts:
-                print(question_id)
-                print(passage_id)
             metadata = {}
 
             # TODO: turn into functions
@@ -444,7 +440,6 @@ class DROPReader(DatasetReader):
             date_tokens = [answer_content[key]
                            for key in ["month", "day", "year"] if key in answer_content and answer_content[key]]
             answer_texts = date_tokens
-            print (answer_texts)
         elif answer_type == "number":
             # answer_content is a string of number
             answer_texts = [answer_content]

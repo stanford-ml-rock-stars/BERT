@@ -7,7 +7,21 @@ from drop_reader_for_bert import DROPReader                                     
 ## BA insert:
 # drop_data_path='/Users/ba/Downloads/cs230/project/drop_dataset/drop_dataset_train.json'
 
-
+"""
+qas:
+    id:
+    question:
+    answers:
+        counting: List[int]
+        spans:
+            question_spans: List
+                answer_start
+                answer_end
+            passage_spans: List
+                answer_start
+                answer_end
+    answer_type:
+"""
 def convert(drop_data_path,
             squad_style_output_path,
             skip_invalid,
@@ -25,7 +39,6 @@ def convert(drop_data_path,
     for instance in instances:
         if instance is None:
             skipped_instances += 1
-            # drop the instance
             continue
 
         instance_count += 1
@@ -86,7 +99,7 @@ def convert(drop_data_path,
                        "paragraphs": [{"context": paragraph_text,
                                        "qas": qas}]}
         squad_style_data.append(new_passage)
-    print(len(squad_style_data))                                                ## added print
+    print('There are', len(squad_style_data), "passages in total")
     with open(squad_style_output_path, "w") as fout:
         squad_style_data = {"data": squad_style_data, "version": "drop-1.0"}
         json.dump(squad_style_data, fout)
