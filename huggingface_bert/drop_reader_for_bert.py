@@ -123,6 +123,9 @@ class DROPReader(DatasetReader):
                     instances.append(instance)
                 else:
                     skip_count += 1
+            # ======================================= REMOVE =====================================================
+            if len(instances) > 1000:
+                break
         # pylint: disable=logging-fstring-interpolation
         logger.info(f"Skipped {skip_count} questions, kept {len(instances)} questions.")
         return instances
@@ -169,38 +172,46 @@ class DROPReader(DatasetReader):
                 print(passage_id)
             metadata = {}
 
-            if answer_type != "spans_abc":
-                valid_passage_spans = self.find_valid_spans(passage_tokens, tokenized_answer_texts) if tokenized_answer_texts else []
-                valid_question_spans = self.find_valid_spans(question_tokens, tokenized_answer_texts) if tokenized_answer_texts else []
-                if not valid_passage_spans:
-                    valid_passage_spans.append((-1, -1))
-                if not valid_question_spans:
-                    valid_question_spans.append((-1, -1))
+            # TODO: turn into functions
+            # ----------- spans ---------------
+            valid_passage_spans = self.find_valid_spans(passage_tokens, tokenized_answer_texts) if tokenized_answer_texts else []
+            valid_question_spans = self.find_valid_spans(question_tokens, tokenized_answer_texts) if tokenized_answer_texts else []
+            if not valid_passage_spans:
+                valid_passage_spans.append((-1, -1))
+            if not valid_question_spans:
+                valid_question_spans.append((-1, -1))
 
-                # the [start, end) index of each token
-                passage_offsets = [(token.idx, token.idx + len(token.text)) for token in passage_tokens]
-                question_offsets = [(token.idx, token.idx + len(token.text)) for token in question_tokens]
+            # the [start, end) index of each token
+            passage_offsets = [(token.idx, token.idx + len(token.text)) for token in passage_tokens]
+            question_offsets = [(token.idx, token.idx + len(token.text)) for token in question_tokens]
 
-                metadata['passage_token_offsets'] = passage_offsets
-                metadata['question_token_offsets'] = question_offsets
-                metadata['valid_passage_spans'] = valid_passage_spans
-                metadata['valid_question_spans'] = valid_question_spans
-                # TODO: remove the if
-                if answer_texts:
-                    metadata['span_answer_texts'] = answer_texts
+            metadata['passage_token_offsets'] = passage_offsets
+            metadata['question_token_offsets'] = question_offsets
+            metadata['valid_passage_spans'] = valid_passage_spans
+            metadata['valid_question_spans'] = valid_question_spans
+            # TODO: remove the if
+            if answer_texts:
+                metadata['span_answer_texts'] = answer_texts
 
-            elif answer_type == "number":
-                pass
-            elif answer_type == "date":
-                pass
+            # ----------- counting ---------------
+            target_numbers = []
+            # `answer_texts` is a list of valid answers.
+            for answer_text in answer_texts:
+                number = self.convert_word_to_number(answer_text)
+                if number is not None:
+                    target_numbers.append(number)
 
+            metadata["number_answer_text"] = answer_texts
+
+            # ----------- date ---------------
+            # TO be continued..
             common_metadata = {
                 "answer_type": answer_type,
+                "original_answer_texts": answer_texts,
                 "original_passage": passage_text,
                 "original_question": question_text,
                 "passage_id": passage_id,
-                "question_id": question_id,
-                "is_impossible": False
+                "question_id": question_id
             }
             metadata.update(common_metadata)
             fields: Dict[str, Field] = {}
@@ -425,6 +436,7 @@ class DROPReader(DatasetReader):
             date_tokens = [answer_content[key]
                            for key in ["month", "day", "year"] if key in answer_content and answer_content[key]]
             answer_texts = date_tokens
+            print (answer_texts)
         elif answer_type == "number":
             # answer_content is a string of number
             answer_texts = [answer_content]

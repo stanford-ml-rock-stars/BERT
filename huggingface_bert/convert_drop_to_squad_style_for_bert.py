@@ -60,6 +60,8 @@ def convert(drop_data_path,
                     "question_spans": question_converted_result,
                     "passage_spans": passage_converted_result
                 }
+            elif answer_type == "number":
+                answers["number"] = metadata["number_answer_text"]
 
             qas.append({"id": metadata["question_id"],
                         "question": metadata["original_question"],
@@ -87,7 +89,7 @@ def convert_span_answers(token_offsets: List[Tuple[int, int]],
             answer_start = token_offsets[span[0]][0]
             answer_end = token_offsets[span[1]][1]
         answers.append({
-            "answer_start": answer_start[idx],
+            "answer_start": answer_start,
             "text": answer_texts
         })
         if single_span:
