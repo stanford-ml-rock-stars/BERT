@@ -3,7 +3,7 @@ import logging
 import itertools
 import string
 from typing import Dict, List, Union, Tuple, Any
-from collections import defaultdict
+from collections import Counter, defaultdict
 from overrides import overrides
 from allennlp.common.file_utils import cached_path
 from allennlp.data.dataset_readers.dataset_reader import DatasetReader
@@ -148,22 +148,21 @@ class DROPReader(DatasetReader):
         if self.question_length_limit is not None:
             question_tokens = question_tokens[: self.question_length_limit]
 
-        answer_type, answer_texts = None, []
+        answer_type: str = None
+        answer_texts: List[str] = []
         if answer_annotations:
-            # Currently, we only have multiple annotations for the dev and test set.
-            for answer_annotation in answer_annotations:
-                type_info, text_info = self.extract_answer_info_from_annotation(answer_annotation)
-                if type_info is not None:
-                    # use the last valid type as the gold type
-                    answer_type = type_info
-                    if self.relaxed_span_match_for_finding_labels:
-                        # If one annotation has multiple spans, treat all spans as correct.
-                        # Using this will make it easier to find matching spans in the passage.
-                        answer_texts += text_info
-                    else:
-                        answer_texts.append(' '.join(text_info))
+            # Currently, we only have multiple annotations for the dev and test set due to the fact that dev and test sets have "validated answers".
+            # We only use the first annotated answer here because we only care about answers in the training set.
+            answer_type, answer_texts = self.extract_answer_info_from_annotation(answer_annotations[0])
+
+        if not answer_texts:
+            print(passage_id)
+            print(question_id)
+            # For some reason the all answer fields are empty. We stop processing.
+            return None
 
         # Tokenize the answer text in order to find the matched span based on token
+        # Basically the following code splits hypen connected words
         tokenized_answer_texts = []
         for answer_text in answer_texts:
             answer_tokens = self._tokenizer.tokenize(answer_text)
@@ -171,30 +170,58 @@ class DROPReader(DatasetReader):
             tokenized_answer_texts.append(' '.join(token.text for token in answer_tokens))
 
         if self.instance_format == "squad":
-            valid_passage_spans = \
-                self.find_valid_spans(passage_tokens, tokenized_answer_texts) if tokenized_answer_texts else []
+            metadata = {}
 
+            # TODO: turn into functions
+            # ----------- spans ---------------
+            valid_passage_spans = self.find_valid_spans(passage_tokens, tokenized_answer_texts) if tokenized_answer_texts else []
+            valid_question_spans = self.find_valid_spans(question_tokens, tokenized_answer_texts) if tokenized_answer_texts else []
             if not valid_passage_spans:
-                if "passage_span" in self.skip_when_all_empty:
-                    return None
-                else:
-                    #valid_passage_spans.append((len(passage_tokens) - 1, len(passage_tokens) - 1))         ## exchanged
-                    valid_passage_spans.append((-1, -1))                                                      ## added/changed
-            return make_reading_comprehension_instance(question_tokens,
-                                                       passage_tokens,
-                                                       self._token_indexers,
-                                                       passage_text,
-                                                       valid_passage_spans,
-                                                       # this `answer_texts` will not be used for evaluation
-                                                       answer_texts,
-                                                       additional_metadata={
-                                                               "original_passage": passage_text,
-                                                               "original_question": question_text,
-                                                               "passage_id": passage_id,
-                                                               "question_id": question_id,
-                                                               "valid_passage_spans": valid_passage_spans,
-                                                               "is_impossible": False,                           ## added
-                                                               "answer_annotations": answer_annotations})
+                valid_passage_spans.append((-1, -1))
+            if not valid_question_spans:
+                valid_question_spans.append((-1, -1))
+
+            # the [start, end) index of each token
+            passage_offsets = [(token.idx, token.idx + len(token.text)) for token in passage_tokens]
+            question_offsets = [(token.idx, token.idx + len(token.text)) for token in question_tokens]
+
+            metadata['passage_token_offsets'] = passage_offsets
+            metadata['question_token_offsets'] = question_offsets
+            metadata['valid_passage_spans'] = valid_passage_spans
+            metadata['valid_question_spans'] = valid_question_spans
+
+            # ----------- counting ---------------
+            numbers_in_answer_texts = []
+            # Put all the numbers that appear in the answer texts in a list
+            # This list is created on ALL types of answers (date, number, spans). It is up to the convert scrip to decide which to use.
+            # For number type of answers, the list should only contain one entry.
+            for answer_text in answer_texts:
+                number = self.convert_word_to_number(answer_text, try_to_include_more_numbers=False)
+                if number is not None:
+                    numbers_in_answer_texts.append(number)
+
+            # Filter the counting numbers
+            # Currently we only support count number 0 ~ 9
+            numbers_for_count = list(range(10))
+            valid_counts = self.find_valid_counts(numbers_for_count, numbers_in_answer_texts)
+
+            metadata["counting"] = valid_counts
+
+            # ----------- date ---------------
+            # TO be continued..
+            common_metadata = {
+                "answer_type": answer_type,
+                "original_answer_texts": answer_texts,
+                "original_passage": passage_text,
+                "original_question": question_text,
+                "passage_id": passage_id,
+                "question_id": question_id
+            }
+            metadata.update(common_metadata)
+            fields: Dict[str, Field] = {}
+            fields['metadata'] = MetadataField(metadata)
+            return Instance(fields)
+        # ------------------------- NOT USED BELOW ----------------------------------------------------------
         elif self.instance_format == "bert":
             question_concat_passage_tokens = question_tokens + [Token("[SEP]")] + passage_tokens
             valid_passage_spans = []
@@ -454,6 +481,9 @@ class DROPReader(DatasetReader):
                     number = None
             return number
 
+    """
+    for every answer in answer_texts, find **ALL** the matching spans for that answer.
+    """
     @staticmethod
     def find_valid_spans(passage_tokens: List[Token],
                          answer_texts: List[str]) -> List[Tuple[int, int]]:
@@ -463,11 +493,13 @@ class DROPReader(DatasetReader):
             word_positions[token].append(i)
         spans = []
         for answer_text in answer_texts:
-            answer_tokens = answer_text.lower().strip(STRIPPED_CHARACTERS).split()
+            answer_tokens = answer_text.lower().split()
+            answer_tokens = [token.strip(STRIPPED_CHARACTERS) for token in answer_tokens]
             num_answer_tokens = len(answer_tokens)
             if answer_tokens[0] not in word_positions:
                 continue
 
+            # Note this will do the matching at every position of the first answer token
             for span_start in word_positions[answer_tokens[0]]:
                 span_end = span_start  # span_end is _inclusive_
                 answer_index = 1
@@ -512,3 +544,229 @@ class DROPReader(DatasetReader):
             if number in targets:
                 valid_indices.append(index)
         return valid_indices
+
+    @staticmethod
+    def make_spans_instance(question_tokens: List[Token],
+                                            passage_tokens: List[Token],
+                                            token_indexers: Dict[str, TokenIndexer],
+                                            passage_text: str,
+                                            token_spans: List[Tuple[int, int]] = None,
+                                            answer_texts: List[str] = None,
+                                            additional_metadata: Dict[str, Any] = None) -> Instance:
+        """
+        =================================================================================
+        Copied from allennlp/data/dataset_readers/reading_comprehension/util.py
+        =================================================================================
+
+        Converts a question, a passage, and an optional answer (or answers) to an ``Instance`` for use
+        in a reading comprehension model.
+
+        Creates an ``Instance`` with at least these fields: ``question`` and ``passage``, both
+        ``TextFields``; and ``metadata``, a ``MetadataField``.  Additionally, if both ``answer_texts``
+        and ``char_span_starts`` are given, the ``Instance`` has ``span_start`` and ``span_end``
+        fields, which are both ``IndexFields``.
+
+        Parameters
+        ----------
+        question_tokens : ``List[Token]``
+            An already-tokenized question.
+        passage_tokens : ``List[Token]``
+            An already-tokenized passage that contains the answer to the given question.
+        token_indexers : ``Dict[str, TokenIndexer]``
+            Determines how the question and passage ``TextFields`` will be converted into tensors that
+            get input to a model.  See :class:`TokenIndexer`.
+        passage_text : ``str``
+            The original passage text.  We need this so that we can recover the actual span from the
+            original passage that the model predicts as the answer to the question.  This is used in
+            official evaluation scripts.
+        token_spans : ``List[Tuple[int, int]]``, optional
+            Indices into ``passage_tokens`` to use as the answer to the question for training.  This is
+            a list because there might be several possible correct answer spans in the passage.
+            Currently, we just select the most frequent span in this list (i.e., SQuAD has multiple
+            annotations on the dev set; this will select the span that the most annotators gave as
+            correct).
+        answer_texts : ``List[str]``, optional
+            All valid answer strings for the given question.  In SQuAD, e.g., the training set has
+            exactly one answer per question, but the dev and test sets have several.  TriviaQA has many
+            possible answers, which are the aliases for the known correct entity.  This is put into the
+            metadata for use with official evaluation scripts, but not used anywhere else.
+        additional_metadata : ``Dict[str, Any]``, optional
+            The constructed ``metadata`` field will by default contain ``original_passage``,
+            ``token_offsets``, ``question_tokens``, ``passage_tokens``, and ``answer_texts`` keys.  If
+            you want any other metadata to be associated with each instance, you can pass that in here.
+            This dictionary will get added to the ``metadata`` dictionary we already construct.
+
+        Return:
+        Fields: Dict[str, Field]:
+            passage: TextField.     [NOT USED]
+            question: TextField.    [NOT USED]
+            span_start: IndexField. [NOT USED]
+            span_end: IndexField.   [NOT USED]
+            metadata:
+                original_passage: string.
+                original_question: string.
+                token_offsets: list[tuple[int, int]].
+                    start and end CHAR index of each token in the passage. The end index is NOT INCLUDED.
+                answer_texts: list[string].
+                    answer separated by spans.
+                valid_passage_spans: list[tuple[int, int]].
+                    start and end WORD index of answer spans in passage. The end index is INCLUDED.
+                    There can be multiple spans.
+                valid_question_spans: list[tuple[int, int]].
+                    start and end WORD index of answer spans in question. The end index is INCLUDED.
+                    There can be multiple spans.
+                is_impossible: boolean.
+                question_tokens: list.     [NOT USED]
+                passage_tokens: list.      [NOT USED]
+                answer_annotations: list.  [NOT USED]
+        """
+        additional_metadata = additional_metadata or {}
+        fields: Dict[str, Field] = {}
+
+        # the [start, end) index of each token
+        passage_offsets = [(token.idx, token.idx + len(token.text)) for token in passage_tokens]
+        question_offsets = [(token.idx, token.idx + len(token.text)) for token in question_tokens]
+
+        metadata = {'original_passage': passage_text,
+                    'passage_token_offsets': passage_offsets,
+                    'question_token_offsets': question_offsets,
+                    'question_tokens': [token.text for token in question_tokens],
+                    'passage_tokens': [token.text for token in passage_tokens], }
+        if answer_texts:
+            metadata['answer_texts'] = answer_texts
+
+        metadata.update(additional_metadata)
+        fields['metadata'] = MetadataField(metadata)
+
+        # -------------------------------- NOT USED -----------------------------------------------------
+        # This is separate so we can reference it later with a known type.
+        passage_field = TextField(passage_tokens, token_indexers)
+        fields['passage'] = passage_field
+        fields['question'] = TextField(question_tokens, token_indexers)
+        if token_spans:
+            # There may be multiple answer annotations, so we pick the one that occurs the most.  This
+            # only matters on the SQuAD dev set, and it means our computed metrics ("start_acc",
+            # "end_acc", and "span_acc") aren't quite the same as the official metrics, which look at
+            # all of the annotations.  This is why we have a separate official SQuAD metric calculation
+            # (the "em" and "f1" metrics use the official script).
+            candidate_answers: Counter = Counter()
+            for span_start, span_end in token_spans:
+                candidate_answers[(span_start, span_end)] += 1
+            span_start, span_end = candidate_answers.most_common(1)[0][0]
+
+            fields['span_start'] = IndexField(span_start, passage_field)
+            fields['span_end'] = IndexField(span_end, passage_field)
+        # ------------------------------------------------------------------------------------------------
+
+        return Instance(fields)
+
+    @staticmethod
+    def make_number_instance(question_tokens: List[Token],
+                                            passage_tokens: List[Token],
+                                            token_indexers: Dict[str, TokenIndexer],
+                                            passage_text: str,
+                                            token_spans: List[Tuple[int, int]] = None,
+                                            answer_texts: List[str] = None,
+                                            additional_metadata: Dict[str, Any] = None) -> Instance:
+        """
+        =================================================================================
+        Copied from allennlp/data/dataset_readers/reading_comprehension/util.py
+        =================================================================================
+
+        Converts a question, a passage, and an optional answer (or answers) to an ``Instance`` for use
+        in a reading comprehension model.
+
+        Creates an ``Instance`` with at least these fields: ``question`` and ``passage``, both
+        ``TextFields``; and ``metadata``, a ``MetadataField``.  Additionally, if both ``answer_texts``
+        and ``char_span_starts`` are given, the ``Instance`` has ``span_start`` and ``span_end``
+        fields, which are both ``IndexFields``.
+
+        Parameters
+        ----------
+        question_tokens : ``List[Token]``
+            An already-tokenized question.
+        passage_tokens : ``List[Token]``
+            An already-tokenized passage that contains the answer to the given question.
+        token_indexers : ``Dict[str, TokenIndexer]``
+            Determines how the question and passage ``TextFields`` will be converted into tensors that
+            get input to a model.  See :class:`TokenIndexer`.
+        passage_text : ``str``
+            The original passage text.  We need this so that we can recover the actual span from the
+            original passage that the model predicts as the answer to the question.  This is used in
+            official evaluation scripts.
+        token_spans : ``List[Tuple[int, int]]``, optional
+            Indices into ``passage_tokens`` to use as the answer to the question for training.  This is
+            a list because there might be several possible correct answer spans in the passage.
+            Currently, we just select the most frequent span in this list (i.e., SQuAD has multiple
+            annotations on the dev set; this will select the span that the most annotators gave as
+            correct).
+        answer_texts : ``List[str]``, optional
+            All valid answer strings for the given question.  In SQuAD, e.g., the training set has
+            exactly one answer per question, but the dev and test sets have several.  TriviaQA has many
+            possible answers, which are the aliases for the known correct entity.  This is put into the
+            metadata for use with official evaluation scripts, but not used anywhere else.
+        additional_metadata : ``Dict[str, Any]``, optional
+            The constructed ``metadata`` field will by default contain ``original_passage``,
+            ``token_offsets``, ``question_tokens``, ``passage_tokens``, and ``answer_texts`` keys.  If
+            you want any other metadata to be associated with each instance, you can pass that in here.
+            This dictionary will get added to the ``metadata`` dictionary we already construct.
+
+        Return:
+        Fields: Dict[str, Field]:
+            passage: TextField.     [NOT USED]
+            question: TextField.    [NOT USED]
+            span_start: IndexField. [NOT USED]
+            span_end: IndexField.   [NOT USED]
+            metadata:
+                original_passage: string.
+                original_question: string.
+                token_offsets: list[tuple[int, int]].
+                    start and end CHAR index of each token in the passage. The end index is NOT INCLUDED.
+                answer_texts: list[string].
+                    answer separated by spans.
+                valid_passage_spans: list[tuple[int, int]].
+                    start and end WORD index of answer spans in passage. The end index is INCLUDED.
+                    There can be multiple spans.
+                valid_question_spans: list[tuple[int, int]].
+                    start and end WORD index of answer spans in question. The end index is INCLUDED.
+                    There can be multiple spans.
+                is_impossible: boolean.
+                question_tokens: list.     [NOT USED]
+                passage_tokens: list.      [NOT USED]
+                answer_annotations: list.  [NOT USED]
+        """
+        additional_metadata = additional_metadata or {}
+        fields: Dict[str, Field] = {}
+        passage_offsets = [(token.idx, token.idx + len(token.text)) for token in passage_tokens]
+
+        metadata = {'original_passage': passage_text,
+                    'token_offsets': passage_offsets,
+                    'question_tokens': [token.text for token in question_tokens],
+                    'passage_tokens': [token.text for token in passage_tokens], }
+        if answer_texts:
+            metadata['answer_texts'] = answer_texts
+
+        metadata.update(additional_metadata)
+        fields['metadata'] = MetadataField(metadata)
+
+        # -------------------------------- NOT USED -----------------------------------------------------
+        # This is separate so we can reference it later with a known type.
+        passage_field = TextField(passage_tokens, token_indexers)
+        fields['passage'] = passage_field
+        fields['question'] = TextField(question_tokens, token_indexers)
+        if token_spans:
+            # There may be multiple answer annotations, so we pick the one that occurs the most.  This
+            # only matters on the SQuAD dev set, and it means our computed metrics ("start_acc",
+            # "end_acc", and "span_acc") aren't quite the same as the official metrics, which look at
+            # all of the annotations.  This is why we have a separate official SQuAD metric calculation
+            # (the "em" and "f1" metrics use the official script).
+            candidate_answers: Counter = Counter()
+            for span_start, span_end in token_spans:
+                candidate_answers[(span_start, span_end)] += 1
+            span_start, span_end = candidate_answers.most_common(1)[0][0]
+
+            fields['span_start'] = IndexField(span_start, passage_field)
+            fields['span_end'] = IndexField(span_end, passage_field)
+        # ------------------------------------------------------------------------------------------------
+
+        return Instance(fields)
