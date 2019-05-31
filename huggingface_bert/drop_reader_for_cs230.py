@@ -123,6 +123,11 @@ class DROPReader(DatasetReader):
                     instances.append(instance)
                 else:
                     skip_count += 1
+            # ---------------------------- FOR TEST ----------------------------------------
+            # early stop
+            if len(instance) > 5:
+                break
+            # ---------------------------- FOR TEST ----------------------------------------
         # pylint: disable=logging-fstring-interpolation
         logger.info(f"Skipped {skip_count} questions, kept {len(instances)} questions.")
         return instances
