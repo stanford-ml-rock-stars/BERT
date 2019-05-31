@@ -1,10 +1,11 @@
 import json
+from typing import List, Tuple
 ## from reading_comprehension.data.drop_reader import DROPReader
 ## BA outcomment above and new line below:
-from drop_reader_for_bert import DROPReader                                     ## changed name
+from drop_reader_for_cs230 import DROPReader                                     ## changed name
 
 ## BA insert:
-drop_data_path='/Users/ba/Downloads/cs230/project/BERT/DATA/drop_dataset_train.json'
+# drop_data_path='/Users/ba/Downloads/cs230/project/BERT/DATA/drop_dataset_train.json'
 
 
 def convert(drop_data_path,
@@ -26,7 +27,7 @@ def convert(drop_data_path,
     for instance in instances:
         passage_id = instance.fields["metadata"].metadata["passage_id"]
 
-        if "answer_texts" in instance.fields["metadata"].metadata:
+        if instance.fields["metadata"].metadata["answer_texts"]:
             if passage_id in instances_grouped_by_passage:
                 instances_grouped_by_passage[passage_id].append(instance)
             else:
@@ -41,45 +42,23 @@ def convert(drop_data_path,
         qas = []
         for instance in instances:
             metadata = instance.fields["metadata"].metadata
-            if metadata["answer_texts"]:                                        ## added to avoid crash with empty instances
-                gold_answer_text = metadata["answer_texts"][0]
-            else:
-                print("empty instance skipped...")                              ## added
-                continue                                                        ## added
-            #answer_spans = metadata["valid_passage_spans"]                     ## outcomment
-            answer_spans = instance.fields["answer_as_passage_spans"]           ## added
-            #token_offsets = metadata["token_offsets"]                          ## outcomment
-            token_offsets = metadata["passage_token_offsets"]                   ## added
-            answers = []
-            #for span in answer_spans:                                          ## added/changed
-            for spanfield in answer_spans:                                      ## added /changed
-
-                span = (spanfield.span_start, spanfield.span_end)               ## added
-
-                if span == (-1,-1):                                             ## added
-                    answer_start = -1                                           ## added
-                    answer_end = -1                                             ## added
-                    metadata["is_impossible"] = True                            ## added
-                else:                                                           ## added
-
-                    answer_start = token_offsets[span[0]][0]                    ## indent
-                    answer_end = token_offsets[span[1]][1]                      ## indent
-                if use_matched_span_as_answer_text:
-                    answer_text = paragraph_text[answer_start: answer_end]
-                else:
-                    answer_text = gold_answer_text
-                answers.append({"answer_start": answer_start,
-                                "text": answer_text})
-                # print(paragraph_text[answer_start: answer_start + len(answer_text)])
-                # print(answer_text)
+                        
+            question_converted_result = convert_span_answers(metadata["question_token_offsets"], 
+                                                             instance.fields["answer_as_question_spans"],  
+                                                             metadata["original_question"],
+                                                             single_span=True)
+            passage_converted_result = convert_span_answers(metadata["passage_token_offsets"], 
+                                                            instance.fields["answer_as_passage_spans"],  
+                                                            metadata["original_passage"],
+                                                            single_span=True)
+            
             qas.append({"id": metadata["question_id"],
                         "question": metadata["original_question"],
-                        "answers": [answers[0]],
-                        "is_impossible": metadata["is_impossible"],                                                   ## added
-                        "answer_as_passage_spans": instance.fields["answer_as_passage_spans"][0].span_start,          ## added
-                        "answer_as_question_spans": instance.fields["answer_as_question_spans"][0].span_start,        ## added
+                        "answer_type": metadata["answer_type"],
+                        "answers_as_question_spans": question_converted_result,
+                        "answers_as_passage_spans": passage_converted_result,
                         "answer_as_add_sub_expressions": instance.fields["answer_as_add_sub_expressions"][0].labels,  ## added
-                        "answer_as_counts": instance.fields["answer_as_counts"][0].label})                            ## added
+                        "answer_as_counts":[labelfield.label for labelfield in instance.fields["answer_as_counts"]]})                            ## added
         new_passage = {"title": passage_id,
                        "paragraphs": [{"context": paragraph_text,
                                        "qas": qas}]}
@@ -89,6 +68,28 @@ def convert(drop_data_path,
         squad_style_data = {"data": squad_style_data, "version": "drop-1.0"}
         json.dump(squad_style_data, fout)
 
+
+def convert_span_answers(token_offsets: List[Tuple[int, int]],
+                         answer_spans,
+                         text: str,
+                         single_span: bool):
+    answers = []
+    for spanfield in answer_spans:
+
+        if spanfield.span_start == -1 and spanfield.span_end -1:
+            answer_start = -1
+            answer_text = ""
+        else:
+            answer_start = token_offsets[spanfield.span_start][0]
+            answer_end = token_offsets[spanfield.span_end][1]
+            answer_text = text[answer_start : answer_end]
+        answers.append({
+            "answer_start": answer_start,
+            "text": answer_text
+        })
+        if single_span:
+            break
+    return answers
 
 def main():
     convert(drop_data_path,                             ## ...

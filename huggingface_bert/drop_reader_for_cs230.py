@@ -19,7 +19,7 @@ from word2number.w2n import word_to_num
 from utils_for_bert import split_tokens_by_hyphen                               ## changed name
 
 ## BA insert:
-file_path='/Users/ba/Downloads/cs230/project/BERT/DATA/drop_dataset_train.json'
+# file_path='/Users/ba/Downloads/cs230/project/BERT/DATA/drop_dataset_train.json'
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
@@ -150,18 +150,9 @@ class DROPReader(DatasetReader):
 
         answer_type, answer_texts = None, []
         if answer_annotations:
-            # Currently, we only have multiple annotations for the dev and test set.
-            for answer_annotation in answer_annotations:
-                type_info, text_info = self.extract_answer_info_from_annotation(answer_annotation)
-                if type_info is not None:
-                    # use the last valid type as the gold type
-                    answer_type = type_info
-                    if self.relaxed_span_match_for_finding_labels:
-                        # If one annotation has multiple spans, treat all spans as correct.
-                        # Using this will make it easier to find matching spans in the passage.
-                        answer_texts += text_info
-                    else:
-                        answer_texts.append(' '.join(text_info))
+            # Currently, we only have multiple annotations for the dev and test set due to the fact that dev and test sets have "validated answers".
+            # We only use the first annotated answer here because we only care about answers in the training set.
+            answer_type, answer_texts = self.extract_answer_info_from_annotation(answer_annotations[0])
 
         # Tokenize the answer text in order to find the matched span based on token
         tokenized_answer_texts = []
@@ -279,6 +270,7 @@ class DROPReader(DatasetReader):
                                                     passage_text,
                                                     answer_info,
                                                     additional_metadata={
+                                                            "answer_type": answer_type,
                                                             "original_passage": passage_text,
                                                             "original_question": question_text,
                                                             "original_numbers": numbers_in_passage,
@@ -464,7 +456,8 @@ class DROPReader(DatasetReader):
             word_positions[token].append(i)
         spans = []
         for answer_text in answer_texts:
-            answer_tokens = answer_text.lower().strip(STRIPPED_CHARACTERS).split()
+            answer_tokens = answer_text.lower().split()
+            answer_tokens = [token.strip(STRIPPED_CHARACTERS) for token in answer_tokens]
             num_answer_tokens = len(answer_tokens)
             if answer_tokens[0] not in word_positions:
                 continue
