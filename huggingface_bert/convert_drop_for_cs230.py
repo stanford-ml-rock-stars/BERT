@@ -51,13 +51,14 @@ def convert(drop_data_path,
                                                             instance.fields["answer_as_passage_spans"],  
                                                             metadata["original_passage"],
                                                             single_span=True)
-            
+
             qas.append({"id": metadata["question_id"],
                         "question": metadata["original_question"],
                         "answer_type": metadata["answer_type"],
                         "answers_as_question_spans": question_converted_result,
                         "answers_as_passage_spans": passage_converted_result,
-                        "answer_as_add_sub_expressions": instance.fields["answer_as_add_sub_expressions"][0].labels,  ## added
+                        "answer_as_add_sub_expressions": [expression.labels for expression in instance.fields["answer_as_add_sub_expressions"]],
+                        "answer_as_add_sub_numbers": [token.text for token in instance.fields["answer_as_add_sub_expressions"][0].sequence_field.tokens],
                         "answer_as_counts":[labelfield.label for labelfield in instance.fields["answer_as_counts"]]})                            ## added
         new_passage = {"title": passage_id,
                        "paragraphs": [{"context": paragraph_text,
