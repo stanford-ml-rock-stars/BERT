@@ -5,7 +5,7 @@ from typing import List, Tuple
 from drop_reader_for_cs230 import DROPReader                                     ## changed name
 
 ## BA insert:
-drop_data_path='/Users/ba/Downloads/cs230/project/BERT/DATA/drop_dataset_train.json'
+#drop_data_path='/Users/ba/Downloads/cs230/project/BERT/DATA/drop_dataset_train.json'
 
 
 def convert(drop_data_path,
@@ -24,7 +24,7 @@ def convert(drop_data_path,
     instance_count = 0
     skipped_instances = 0
     instances_grouped_by_passage = {}
-    for instance in instances[:200]:                                            ## for mini json
+    for instance in instances:
         passage_id = instance.fields["metadata"].metadata["passage_id"]
 
         if instance.fields["metadata"].metadata["answer_texts"]:
@@ -59,7 +59,7 @@ def convert(drop_data_path,
                         "answers_as_passage_spans": passage_converted_result,
                         "answer_as_add_sub_expressions": [expression.labels for expression in instance.fields["answer_as_add_sub_expressions"]],
                         "answer_as_add_sub_numbers": [token.text for token in instance.fields["answer_as_add_sub_expressions"][0].sequence_field.tokens],
-                        "answer_as_counts":[labelfield.label for labelfield in instance.fields["answer_as_counts"]]})                            ## added
+                        "answer_as_counts":[labelfield.label for labelfield in instance.fields["answer_as_counts"]]})                                       ## added
         new_passage = {"title": passage_id,
                        "paragraphs": [{"context": paragraph_text,
                                        "qas": qas}]}
@@ -97,7 +97,7 @@ def convert_span_answers(token_offsets: List[Tuple[int, int]],
 
 def main():
     convert(drop_data_path,                             ## ...
-            "drop_train_for_cs230_mini.json",                ## changed name
+            "drop_train_for_cs230.json",                ## changed name
             skip_invalid=False,                         ## changed to False
             use_matched_span_as_answer_text=False)      ## changed to False
 
