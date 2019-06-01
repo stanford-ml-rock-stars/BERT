@@ -19,7 +19,7 @@ from word2number.w2n import word_to_num
 from utils_for_bert import split_tokens_by_hyphen                               ## changed name
 
 ## BA insert:
-# file_path='/Users/ba/Downloads/cs230/project/BERT/DATA/drop_dataset_train.json'
+file_path='/Users/ba/Downloads/cs230/project/BERT/DATA/drop_dataset_train.json'
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 

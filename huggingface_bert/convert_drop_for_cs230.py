@@ -5,7 +5,7 @@ from typing import List, Tuple
 from drop_reader_for_cs230 import DROPReader                                     ## changed name
 
 ## BA insert:
-# drop_data_path='/Users/ba/Downloads/cs230/project/BERT/DATA/drop_dataset_train.json'
+drop_data_path='/Users/ba/Downloads/cs230/project/BERT/DATA/drop_dataset_train.json'
 
 
 def convert(drop_data_path,
@@ -24,7 +24,7 @@ def convert(drop_data_path,
     instance_count = 0
     skipped_instances = 0
     instances_grouped_by_passage = {}
-    for instance in instances:
+    for instance in instances[:200]:                                            ## for mini json
         passage_id = instance.fields["metadata"].metadata["passage_id"]
 
         if instance.fields["metadata"].metadata["answer_texts"]:
@@ -42,13 +42,13 @@ def convert(drop_data_path,
         qas = []
         for instance in instances:
             metadata = instance.fields["metadata"].metadata
-                        
-            question_converted_result = convert_span_answers(metadata["question_token_offsets"], 
-                                                             instance.fields["answer_as_question_spans"],  
+
+            question_converted_result = convert_span_answers(metadata["question_token_offsets"],
+                                                             instance.fields["answer_as_question_spans"],
                                                              metadata["original_question"],
                                                              single_span=True)
-            passage_converted_result = convert_span_answers(metadata["passage_token_offsets"], 
-                                                            instance.fields["answer_as_passage_spans"],  
+            passage_converted_result = convert_span_answers(metadata["passage_token_offsets"],
+                                                            instance.fields["answer_as_passage_spans"],
                                                             metadata["original_passage"],
                                                             single_span=True)
 
@@ -80,13 +80,16 @@ def convert_span_answers(token_offsets: List[Tuple[int, int]],
         if spanfield.span_start == -1 and spanfield.span_end -1:
             answer_start = -1
             answer_text = ""
+            is_impossible = True                                                ## added
         else:
             answer_start = token_offsets[spanfield.span_start][0]
             answer_end = token_offsets[spanfield.span_end][1]
             answer_text = text[answer_start : answer_end]
+            is_impossible = False                                               ## added
         answers.append({
             "answer_start": answer_start,
-            "text": answer_text
+            "text": answer_text,
+            "is_impossible": is_impossible                                      ## added
         })
         if single_span:
             break
@@ -94,7 +97,7 @@ def convert_span_answers(token_offsets: List[Tuple[int, int]],
 
 def main():
     convert(drop_data_path,                             ## ...
-            "drop_train_for_cs230.json",                ## changed name
+            "drop_train_for_cs230_mini.json",                ## changed name
             skip_invalid=False,                         ## changed to False
             use_matched_span_as_answer_text=False)      ## changed to False
 

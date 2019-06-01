@@ -1250,7 +1250,7 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
         self.classification_2 = nn.Linear(64, 10)                                       ## Added second linear layer
         #self.numbers_weights = torch.tensor([0.5,2,2,2,2,2,2,2,2,0.5])                 ## weights for number CrossEntropy
 
-    def forward(self, input_ids, token_type_ids=None, attention_mask=None, start_positions=None, end_positions=None, numbers=None):     ## added numbers
+    def forward(self, input_ids, token_type_ids=None, attention_mask=None, start_positions=None, end_positions=None, answers_as_counts=None):     ## added answers_as_counts
         sequence_output, _ = self.bert(input_ids, token_type_ids, attention_mask, output_all_encoded_layers=False)
         logits = self.qa_outputs(sequence_output)
         start_logits, end_logits = logits.split(1, dim=-1)
@@ -1262,7 +1262,7 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
         class_logits = self.relu(class_logits)                                        ## Added for classification
         class_logits = self.classification_2(class_logits)                            ## Added for classification
         class_logits = class_logits.squeeze(-1)                                       ## Added squeeze
-        number_preds = torch.argmax(class_logits, -1)                                 ## Added argmax to get number predictions
+        answers_as_counts_preds = torch.argmax(class_logits, -1)                      ## Added argmax to get answers_as_counts predictions
 
         #print('shape of sequence_output:... ', sequence_output.size())         ## Added print
         #print('shape of class_logits:... ', class_logits.size())               ## Added print
@@ -1290,12 +1290,12 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
             loss_fct_2 = CrossEntropyLoss()                                     ## Added loss function
             start_loss = loss_fct_1(start_logits, start_positions)
             end_loss = loss_fct_1(end_logits, end_positions)
-            classification_loss = loss_fct_2(class_logits, numbers)             ## Added classification loss
+            classification_loss = loss_fct_2(class_logits, answers_as_counts)   ## Added classification loss
 
             #hits = torch.eq(number_preds, numbers).float()                     ## added hits
             #accuracy = torch.mean(hits)                                        ## Added accuracy
 
             total_loss = (start_loss + end_loss + classification_loss*5) / 3    ## Added classification_loss and changed denominator to 3
-            return total_loss #, classification_loss, accuracy                  ## Added all (except total_loss)                                      ## Added accuracy
+            return total_loss #, classification_loss, accuracy                  ## Added all (except total_loss)
         else:
-            return start_logits, end_logits, number_preds                       ## added number_preds
+            return start_logits, end_logits, answers_as_counts_preds            ## added answers_as_counts_preds

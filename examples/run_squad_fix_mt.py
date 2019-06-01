@@ -61,7 +61,8 @@ class SquadExample(object):
                  orig_answer_text=None,
                  start_position=None,
                  end_position=None,
-                 is_impossible=None):
+                 is_impossible=None,
+                 answer_as_counts=None):                                        ## added
         self.qas_id = qas_id
         self.question_text = question_text
         self.doc_tokens = doc_tokens
@@ -69,6 +70,7 @@ class SquadExample(object):
         self.start_position = start_position
         self.end_position = end_position
         self.is_impossible = is_impossible
+        self.answer_as_counts = answer_as_counts                                ## added
 
     def __str__(self):
         return self.__repr__()
@@ -85,6 +87,8 @@ class SquadExample(object):
             s += ", end_position: %d" % (self.end_position)
         if self.is_impossible:
             s += ", is_impossible: %r" % (self.is_impossible)
+        if self.answer_as_counts:
+            s += ", answer_as_counts: %r" % (self.answer_as_counts)             ## added
         return s
 
 
@@ -104,7 +108,7 @@ class InputFeatures(object):
                  start_position=None,
                  end_position=None,
                  is_impossible=None,
-                 number=None):                                                  ## added number
+                 answer_as_count=None):                                         ## added
         self.unique_id = unique_id
         self.example_index = example_index
         self.doc_span_index = doc_span_index
@@ -117,7 +121,7 @@ class InputFeatures(object):
         self.start_position = start_position
         self.end_position = end_position
         self.is_impossible = is_impossible
-        self.number = number                                                    ## added number
+        self.answer_as_counts = answer_as_counts                                ## added answer_as_counts
 
 
 def read_squad_examples(input_file, is_training, version_2_with_negative):
@@ -152,18 +156,22 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
             for qa in paragraph["qas"]:
                 qas_id = qa["id"]
                 question_text = qa["question"]
+                answer_as_counts = qa["answer_as_counts"][0]                    ## added
                 start_position = None
                 end_position = None
                 orig_answer_text = None
                 is_impossible = False
                 if is_training:
                     if version_2_with_negative:
-                        is_impossible = qa["is_impossible"]
+                        #is_impossible = qa["is_impossible"]                    ## outcomment
+                        is_impossible = qa["answers_as_passage_spans"][2]       ## added because new json
+                        print("check is_impossible...", is_impossible)          ## added print
                     if (len(qa["answers"]) != 1) and (not is_impossible):
                         raise ValueError(
                             "For training, each question should have exactly 1 answer.")
                     if not is_impossible:
-                        answer = qa["answers"][0]
+                        #answer = qa["answers"][0]                              ## outcomment
+                        answer = qa["answers_as_passage_spans"][0]              ## added because new json
                         orig_answer_text = answer["text"]
                         answer_offset = answer["answer_start"]
                         answer_length = len(orig_answer_text)
@@ -186,9 +194,9 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
                     else:
                         start_position = -1
                         end_position = -1
-                        #orig_answer_text = ""                                  ## outcomment
-                        answer = qa["answers"][0]                               ## added
-                        orig_answer_text = answer["text"]                       ## added
+                        orig_answer_text = ""                                    ## outcomment - no, back to original
+                        #answer = qa["answers"][0]                               ## added - no, back after new json
+                        #orig_answer_text = answer["text"]                       ## added - no, back...
 
                 example = SquadExample(
                     qas_id=qas_id,
@@ -197,7 +205,8 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
                     orig_answer_text=orig_answer_text,
                     start_position=start_position,
                     end_position=end_position,
-                    is_impossible=is_impossible)
+                    is_impossible=is_impossible,
+                    answer_as_counts=answer_as_counts)                          ## added
 
                 examples.append(example)
     print("skipped examples because matching answer could not be found:  ", counter)     ## added
@@ -215,18 +224,6 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
     features = []
     for (example_index, example) in enumerate(examples):
         query_tokens = tokenizer.tokenize(example.question_text)
-        #print(example.orig_answer_text)                                        ## added
-        try:                                                                    ## added try except block
-            number = abs(float(example.orig_answer_text))                       ## absolute to avoid bad numbers (just 2 examples)!
-            if number > 9:
-                number = 9
-        except (ValueError, TypeError):
-            number = 0
-        #print("number: ", number)                                              ## added print
-
-        targets = [0,1,2,3,4,5,6,7,8,9]                                         ## added
-        if number not in targets:                                               ## added
-            continue                                                            ## exclude weird number answers
 
         if len(query_tokens) > max_query_length:
             query_tokens = query_tokens[0:max_query_length]
@@ -337,7 +334,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
             if is_training and example.is_impossible:
                 start_position = 0
                 end_position = 0
-            if example_index < 1:                                               ## 1 changed from 20
+            if example_index < 3:                                               ## 3 changed from 20
                 logger.info("*** Example ***")
                 logger.info("unique_id: %s" % (unique_id))
                 logger.info("example_index: %s" % (example_index))
@@ -355,7 +352,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
                     "segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
                 if is_training and example.is_impossible:
                     logger.info("impossible example")
-                    logger.info("answer: %s" % (number))                        ## added/changed
+                    logger.info("answer: %s" % (answer_text))
                 if is_training and not example.is_impossible:
                     answer_text = " ".join(tokens[start_position:(end_position + 1)])
                     logger.info("start_position: %d" % (start_position))
@@ -377,7 +374,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
                     start_position=start_position,
                     end_position=end_position,
                     is_impossible=example.is_impossible,
-                    number=number))                                             ## added
+                    answer_as_counts=example.answer_as_counts))                 ## added
             unique_id += 1
 
     return features
@@ -458,7 +455,7 @@ def _check_is_max_context(doc_spans, cur_span_index, position):
 
 
 RawResult = collections.namedtuple("RawResult",
-                                   ["unique_id", "start_logits", "end_logits", "numbers"])      ## added numbers
+                                   ["unique_id", "start_logits", "end_logits", "answer_as_counts"])      ## added answer_as_counts
 
 
 def write_predictions(all_examples, all_features, all_results, n_best_size,
@@ -640,9 +637,9 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
                 best_non_null_entry.end_logit)
             scores_diff_json[example.qas_id] = score_diff
             if score_diff > null_score_diff_threshold:
-                #all_predictions[example.qas_id] = ""                                   ## outcomment
-                all_predictions[example.qas_id] = result.numbers                        ## added
-                #print("in write predictions result.numbers: ", result.numbers)         ## added
+                #all_predictions[example.qas_id] = ""                                                  ## outcomment
+                all_predictions[example.qas_id] = result.answer_as_counts                              ## added
+                print("in write predictions result.answer_as_counts: ", result.answer_as_counts)       ## added
             else:
                 all_predictions[example.qas_id] = best_non_null_entry.text
             all_nbest_json[example.qas_id] = nbest_json
@@ -947,8 +944,8 @@ def main():
             input_file=args.train_file, is_training=True, version_2_with_negative=args.version_2_with_negative)
 
         ## Here you could truncate the examples to have a toy set for debugging:
-        #train_examples = train_examples[:10]                                                                   ## Reduce number of train examples to ????
-        #print('only 200 examples for training')                                                                ## added
+        train_examples = train_examples[:100]                                                                   ## Reduce number of train examples to ????
+        print('only 100 examples for training')                                                                ## added
 
         cached_train_features_file = args.train_file+'_count_{0}_{1}_{2}_{3}'.format(                           ## Added _count in string
             list(filter(None, args.bert_model.split('/'))).pop(), str(args.max_seq_length), str(args.doc_stride), str(args.max_query_length))
@@ -972,12 +969,12 @@ def main():
         all_segment_ids = torch.tensor([f.segment_ids for f in train_features], dtype=torch.long)
         all_start_positions = torch.tensor([f.start_position for f in train_features], dtype=torch.long)
         all_end_positions = torch.tensor([f.end_position for f in train_features], dtype=torch.long)
-        all_numbers = torch.tensor([f.number for f in train_features], dtype=torch.long)                         ## added number tensor long
+        all_answers_as_counts = torch.tensor([f.answer_as_counts for f in train_features], dtype=torch.long)     ## added answers_as_counts tensor long
         train_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids,
-                                   all_start_positions, all_end_positions, all_numbers)                          ## added all_numbers
+                                   all_start_positions, all_end_positions, all_answers_as_counts)                ## added all_answers_as_counts
 
         #print("saving feature_check...")                                                                        ## added print
-        #feature_check = np.column_stack((all_start_positions, all_end_positions, all_numbers))                  ## Added
+        #feature_check = np.column_stack((all_start_positions, all_end_positions, all_answers_as_counts))        ## Added
         #np.savetxt('feature_check', feature_check)                                                              ## added for detecting bad numbers
 
         if args.local_rank == -1:
@@ -1044,8 +1041,8 @@ def main():
             for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])):
                 if n_gpu == 1:
                     batch = tuple(t.to(device) for t in batch) # multi-gpu does scattering it-self
-                input_ids, input_mask, segment_ids, start_positions, end_positions, numbers = batch     ## added numbers
-                loss = model(input_ids, segment_ids, input_mask, start_positions, end_positions, numbers)    ## added numbers and outputs
+                input_ids, input_mask, segment_ids, start_positions, end_positions, answers_as_counts = batch          ## added answers_as_counts
+                loss = model(input_ids, segment_ids, input_mask, start_positions, end_positions, answers_as_counts)    ## added answers_as_counts
 
                 #losses.append(loss.item())                                                             ## Added
                 #classification_losses.append(classification_loss.item())                               ## Added
@@ -1099,8 +1096,8 @@ def main():
             input_file=args.predict_file, is_training=False, version_2_with_negative=args.version_2_with_negative)
 
         ## Here you could truncate the dev set to have a toy set for debugging:
-        #eval_examples = eval_examples[:100]                                                             ## Reduce number of dev examples to ????
-        #print('only 100 examples for evaluation')
+        eval_examples = eval_examples[:100]                                                             ## Reduce number of dev examples to ????
+        print('only 100 examples for evaluation')
 
         eval_features = convert_examples_to_features(
             examples=eval_examples,
@@ -1134,18 +1131,18 @@ def main():
             input_mask = input_mask.to(device)
             segment_ids = segment_ids.to(device)
             with torch.no_grad():
-                batch_start_logits, batch_end_logits, batch_numbers = model(input_ids, segment_ids, input_mask)       ## added batch_numbers
+                batch_start_logits, batch_end_logits, batch_answers_as_counts = model(input_ids, segment_ids, input_mask)       ## added batch_answers_as_counts
             for i, example_index in enumerate(example_indices):
                 start_logits = batch_start_logits[i].detach().cpu().tolist()
                 end_logits = batch_end_logits[i].detach().cpu().tolist()
-                numbers = batch_numbers[i].detach().cpu().tolist()              ## added
-                #print("number_preds from model: ", numbers)                    ## added
+                answer_as_counts = batch_answers_as_counts[i].detach().cpu().tolist()             ## added
+                print("answer_as_counts_preds from model: ", answer_as_counts)                    ## added
                 eval_feature = eval_features[example_index.item()]
                 unique_id = int(eval_feature.unique_id)
                 all_results.append(RawResult(unique_id=unique_id,
                                              start_logits=start_logits,
                                              end_logits=end_logits,
-                                             numbers=numbers))                  ## added numbers
+                                             answer_as_counts=answer_as_counts))                  ## added
 
         #print("all_results: ", all_results)                                    ## added print
 
