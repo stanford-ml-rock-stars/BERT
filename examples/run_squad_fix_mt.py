@@ -108,7 +108,7 @@ class InputFeatures(object):
                  start_position=None,
                  end_position=None,
                  is_impossible=None,
-                 answer_as_count=None):                                         ## added
+                 answer_as_counts=None):                                         ## added
         self.unique_id = unique_id
         self.example_index = example_index
         self.doc_span_index = doc_span_index
@@ -135,10 +135,11 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
         return False
 
     examples = []
-    counter = 0                                                                 ## added
+    unmatched_answers_counter = 0                                                                 ## added
     for entry in input_data:
         for paragraph in entry["paragraphs"]:
             paragraph_text = paragraph["context"]
+
             doc_tokens = []
             char_to_word_offset = []
             prev_is_whitespace = True
@@ -166,9 +167,9 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
                         #is_impossible = qa["is_impossible"]                    ## outcomment
                         is_impossible = qa["answers_as_passage_spans"][2]       ## added because new json
                         print("check is_impossible...", is_impossible)          ## added print
-                    if (len(qa["answers"]) != 1) and (not is_impossible):
-                        raise ValueError(
-                            "For training, each question should have exactly 1 answer.")
+                    # if (len(qa["answers"]) != 1) and (not is_impossible):
+                        #raise ValueError(
+                        #    "For training, each question should have exactly 1 answer.")
                     if not is_impossible:
                         #answer = qa["answers"][0]                              ## outcomment
                         answer = qa["answers_as_passage_spans"][0]              ## added because new json
@@ -189,7 +190,7 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
                         if actual_text.find(cleaned_answer_text) == -1:
                             #logger.warning("Could not find answer: '%s' vs. '%s'",     ## outcommented because we have counter
                                            #actual_text, cleaned_answer_text)
-                            counter += 1                                                ## added
+                            unmatched_answers_counter += 1                                                ## added
                             continue
                     else:
                         start_position = -1
@@ -209,7 +210,7 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
                     answer_as_counts=answer_as_counts)                          ## added
 
                 examples.append(example)
-    print("skipped examples because matching answer could not be found:  ", counter)     ## added
+    print("skipped examples because matching answer could not be found:  ", unmatched_answers_counter)     ## added
     #print("print some examples...", examples[:10])                                      ## added print
     return examples
 
@@ -222,6 +223,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
     unique_id = 1000000000
 
     features = []
+
     for (example_index, example) in enumerate(examples):
         query_tokens = tokenizer.tokenize(example.question_text)
 
@@ -230,6 +232,9 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
 
         tok_to_orig_index = []
         orig_to_tok_index = []
+        # TODO: this is the output by Tokenizer, whereas doc_tokens are output by Whitespace tokenizer(split the sentence only by whitespace)
+        # Change the variable name to make it less confusing
+        # Look at _improve_answer_span for an explanation.
         all_doc_tokens = []
         for (i, token) in enumerate(example.doc_tokens):
             orig_to_tok_index.append(len(all_doc_tokens))
@@ -238,6 +243,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
                 tok_to_orig_index.append(i)
                 all_doc_tokens.append(sub_token)
 
+        # token index
         tok_start_position = None
         tok_end_position = None
         if is_training and example.is_impossible:
@@ -274,10 +280,12 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
 
         for (doc_span_index, doc_span) in enumerate(doc_spans):
             tokens = []
+            # a map with the key being the passage index of the final token array, value being the whitespace tokenized passage index
             token_to_orig_map = {}
             token_is_max_context = {}
             segment_ids = []
             tokens.append("[CLS]")
+            # segment type of each token, 0 is question, 1 is passage
             segment_ids.append(0)
             for token in query_tokens:
                 tokens.append(token)
@@ -289,6 +297,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
                 split_token_index = doc_span.start + i
                 token_to_orig_map[len(tokens)] = tok_to_orig_index[split_token_index]
 
+                # whether this DocSpan is the right one to look at for this split_token_index
                 is_max_context = _check_is_max_context(doc_spans, doc_span_index,
                                                        split_token_index)
                 token_is_max_context[len(tokens)] = is_max_context
@@ -297,6 +306,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
             tokens.append("[SEP]")
             segment_ids.append(1)
 
+            # this is the index of each token in the preloaded vocab list
             input_ids = tokenizer.convert_tokens_to_ids(tokens)
 
             # The mask has 1 for real tokens and 0 for padding tokens. Only real
@@ -313,6 +323,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
             assert len(input_mask) == max_seq_length
             assert len(segment_ids) == max_seq_length
 
+            # the start and end positions of each DocSpan
             start_position = None
             end_position = None
             if is_training and not example.is_impossible:
@@ -334,6 +345,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
             if is_training and example.is_impossible:
                 start_position = 0
                 end_position = 0
+            # Logging
             if example_index < 3:                                               ## 3 changed from 20
                 logger.info("*** Example ***")
                 logger.info("unique_id: %s" % (unique_id))
@@ -785,9 +797,8 @@ def _compute_softmax(scores):
         probs.append(score / total_sum)
     return probs
 
-def main():
+def _get_args():
     parser = argparse.ArgumentParser()
-
     ## Required parameters
     parser.add_argument("--bert_model", default=None, type=str, required=True,
                         help="Bert pre-trained model selected in the list: bert-base-uncased, "
@@ -862,6 +873,10 @@ def main():
     parser.add_argument('--server_ip', type=str, default='', help="Can be used for distant debugging.")
     parser.add_argument('--server_port', type=str, default='', help="Can be used for distant debugging.")
     args = parser.parse_args()
+    return args
+
+def main():
+    args = _get_args()
     print(args)
 
     if args.server_ip and args.server_port:
@@ -897,6 +912,7 @@ def main():
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
+
     if n_gpu > 0:
         torch.cuda.manual_seed_all(args.seed)
 
@@ -925,21 +941,24 @@ def main():
 
     if args.fp16:
         model.half()
+
     model.to(device)
+
     if args.local_rank != -1:
         try:
             from apex.parallel import DistributedDataParallel as DDP
         except ImportError:
             raise ImportError("Please install apex from https://www.github.com/nvidia/apex to use distributed and fp16 training.")
-
         model = DDP(model)
     elif n_gpu > 1:
         model = torch.nn.DataParallel(model)
 
+
+    ###################################################################################################################
+    #                                                     TRAIN
+    ###################################################################################################################
     if args.do_train:
-
         # Prepare data loader
-
         train_examples = read_squad_examples(
             input_file=args.train_file, is_training=True, version_2_with_negative=args.version_2_with_negative)
 
@@ -947,6 +966,7 @@ def main():
         train_examples = train_examples[:100]                                                                   ## Reduce number of train examples to ????
         print('only 100 examples for training')                                                                ## added
 
+        # try loading cached features
         cached_train_features_file = args.train_file+'_count_{0}_{1}_{2}_{3}'.format(                           ## Added _count in string
             list(filter(None, args.bert_model.split('/'))).pop(), str(args.max_seq_length), str(args.doc_stride), str(args.max_query_length))
         try:
@@ -964,6 +984,8 @@ def main():
                 logger.info("  Saving train features into cached file %s", cached_train_features_file)
                 with open(cached_train_features_file, "wb") as writer:
                     pickle.dump(train_features, writer)
+
+        # turn input into tensors
         all_input_ids = torch.tensor([f.input_ids for f in train_features], dtype=torch.long)
         all_input_mask = torch.tensor([f.input_mask for f in train_features], dtype=torch.long)
         all_segment_ids = torch.tensor([f.segment_ids for f in train_features], dtype=torch.long)
@@ -987,7 +1009,6 @@ def main():
             num_train_optimization_steps = num_train_optimization_steps // torch.distributed.get_world_size()
 
         # Prepare optimizer
-
         param_optimizer = list(model.named_parameters())
 
         # hack to remove pooler, which is not used
@@ -1071,6 +1092,10 @@ def main():
             #data = np.column_stack((losses, classification_losses, accuracies))         ## Added
             #np.savetxt('mt_basic_indicators.out', data)                                 ## Added for graphs
 
+
+    ###################################################################################################################
+    #                                                     TRAIN OUTPUT
+    ###################################################################################################################
     if args.do_train and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
         # Save a trained model, configuration and tokenizer
         model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
@@ -1091,6 +1116,9 @@ def main():
 
     model.to(device)
 
+    ###################################################################################################################
+    #                                                    PREDICT
+    ###################################################################################################################
     if args.do_predict and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
         eval_examples = read_squad_examples(
             input_file=args.predict_file, is_training=False, version_2_with_negative=args.version_2_with_negative)
