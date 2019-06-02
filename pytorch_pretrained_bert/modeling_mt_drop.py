@@ -1247,7 +1247,7 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
 
         self.classification_1 = nn.Linear(config.hidden_size*self.max_seq_length, 64)   ## Added linear layer for digit classification
         self.relu = nn.ReLU()                                                           ## Added Relu for digit classification
-        self.classification_2 = nn.Linear(64, 10)                                       ## Added second linear layer
+        self.classification_2 = nn.Linear(64, 11)                                       ## Added second linear layer with N+1 classes
         #self.numbers_weights = torch.tensor([0.5,2,2,2,2,2,2,2,2,0.5])                 ## weights for number CrossEntropy
 
     def forward(self, input_ids, token_type_ids=None, attention_mask=None, start_positions=None, end_positions=None, answers_as_counts=None):     ## added answers_as_counts
@@ -1266,11 +1266,12 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
 
         #print('shape of sequence_output:... ', sequence_output.size())         ## Added print
         #print('shape of class_logits:... ', class_logits.size())               ## Added print
-        #print('shape of numbers:... ',numbers.size())                          ## Added print
+        #print('shape of answers_as_counts:... ',answers_as_counts.size())      ## Added print
         #print('shape of logits:... ', logits.size())                           ## Added print
-        #print('shape of number_preds:... ',number_preds.size())                ## Added print
-        #print('raw number_preds:... ', number_preds)                           ## Added print
-        #print('raw numbers: ', numbers)                                        ## Added print
+        #print('shape of answers_as_counts_preds:... ',answers_as_counts_preds.size())    ## Added print
+        #print('raw answers_as_counts_preds:... ', answers_as_counts_preds)               ## Added print
+        #print('raw start_positions:... ', start_positions)                     ## Added print
+        #print('raw answers_as_counts: ', answers_as_counts)                    ## Added print
 
         if start_positions is not None and end_positions is not None:
             # If we are on multi-GPU, split add a dimension
@@ -1283,11 +1284,9 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
             start_positions.clamp_(0, ignored_index)
             end_positions.clamp_(0, ignored_index)
 
-            numbers.clamp_(0,9)                                                 ## Added to avoid cuda RuntimeError
-
             loss_fct_1 = CrossEntropyLoss(ignore_index=ignored_index)
             #loss_fct_2 = CrossEntropyLoss(weight=self.numbers_weights)         ## Added loss function
-            loss_fct_2 = CrossEntropyLoss()                                     ## Added loss function
+            loss_fct_2 = CrossEntropyLoss(ignore_index=10)                      ## Added loss function, ignore loss for class 10
             start_loss = loss_fct_1(start_logits, start_positions)
             end_loss = loss_fct_1(end_logits, end_positions)
             classification_loss = loss_fct_2(class_logits, answers_as_counts)   ## Added classification loss
@@ -1295,7 +1294,7 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
             #hits = torch.eq(number_preds, numbers).float()                     ## added hits
             #accuracy = torch.mean(hits)                                        ## Added accuracy
 
-            total_loss = (start_loss + end_loss + classification_loss*5) / 3    ## Added classification_loss and changed denominator to 3
+            total_loss = (start_loss + end_loss + classification_loss) / 3      ## Added classification_loss and changed denominator to 3
             return total_loss #, classification_loss, accuracy                  ## Added all (except total_loss)
         else:
             return start_logits, end_logits, answers_as_counts_preds            ## added answers_as_counts_preds

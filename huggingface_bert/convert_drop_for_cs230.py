@@ -2,11 +2,11 @@ import json
 from typing import List, Tuple
 ## from reading_comprehension.data.drop_reader import DROPReader
 ## BA outcomment above and new line below:
-from drop_reader_for_cs230 import DROPReader                                     ## changed name
+from drop_reader_for_cs230 import DROPReader                                    ## changed name
 
 ## BA insert:
-#drop_data_path='/Users/ba/Downloads/cs230/project/BERT/DATA/drop_dataset_train.json'
-
+#drop_data_path_train='/Users/ba/Downloads/cs230/project/BERT/DATA/drop_dataset_train.json'
+#drop_data_path_dev='/Users/ba/Downloads/cs230/project/BERT/DATA/drop_dataset_dev.json'
 
 def convert(drop_data_path,
             squad_style_output_path,
@@ -20,7 +20,7 @@ def convert(drop_data_path,
     print(f"Totally {len(list(instances))} instances")
 
     #instances = instances[:1000]      ## test
-    #print(instances)                ## test
+    #print(instances)                  ## test
     instance_count = 0
     skipped_instances = 0
     instances_grouped_by_passage = {}
@@ -96,17 +96,17 @@ def convert_span_answers(token_offsets: List[Tuple[int, int]],
     return answers
 
 def main():
-    convert(drop_data_path,                             ## ...
+    convert("drop_dataset_train.json",                  ## ...
             "drop_train_for_cs230.json",                ## changed name
             skip_invalid=False,                         ## changed to False
             use_matched_span_as_answer_text=False)      ## changed to False
 
     ## BA outcomment (because already done):
-    """convert("drop_dev.json",
-            "drop_squad_style_dev.json",
+    convert("drop_dataset_dev.json",
+            "drop_dev_for_cs230.json",
             skip_invalid=False,
             use_matched_span_as_answer_text=False)
-            """
+
     ## BA outcomment:
     """convert("drop_test.json",
             "drop_squad_style_test.json",
