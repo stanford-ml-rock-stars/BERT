@@ -158,6 +158,8 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
                 qas_id = qa["id"]
                 question_text = qa["question"]
                 answer_as_counts = qa["answer_as_counts"][0]                    ## added
+                if answer_as_counts < 0 or answer_as_counts > 10:               ## added
+                    answer_as_counts = 10                                       ## added
                 start_position = None
                 end_position = None
                 orig_answer_text = None
@@ -165,11 +167,12 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
                 if is_training:
                     if version_2_with_negative:
                         #is_impossible = qa["is_impossible"]                    ## outcomment
-                        is_impossible = qa["answers_as_passage_spans"][2]       ## added because new json
-                        print("check is_impossible...", is_impossible)          ## added print
-                    # if (len(qa["answers"]) != 1) and (not is_impossible):
-                        #raise ValueError(
-                        #    "For training, each question should have exactly 1 answer.")
+                        is_impossible = qa["answers_as_passage_spans"][0]["is_impossible"]    ## added because new json
+                        #print("check is_impossible...", is_impossible)         ## added print
+                    #if (len(qa["answers"]) != 1) and (not is_impossible):      ## outcomment
+                    if (len(qa["answers_as_passage_spans"]) != 1) and (not is_impossible):      ## added
+                        raise ValueError(
+                            "For training, each question should have exactly 1 answer.")
                     if not is_impossible:
                         #answer = qa["answers"][0]                              ## outcomment
                         answer = qa["answers_as_passage_spans"][0]              ## added because new json
@@ -364,7 +367,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
                     "segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
                 if is_training and example.is_impossible:
                     logger.info("impossible example")
-                    logger.info("answer: %s" % (answer_text))
+                    logger.info("answer: %s" % (example.orig_answer_text))              ## added example.orig_
                 if is_training and not example.is_impossible:
                     answer_text = " ".join(tokens[start_position:(end_position + 1)])
                     logger.info("start_position: %d" % (start_position))
@@ -650,8 +653,8 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
             scores_diff_json[example.qas_id] = score_diff
             if score_diff > null_score_diff_threshold:
                 #all_predictions[example.qas_id] = ""                                                  ## outcomment
-                all_predictions[example.qas_id] = result.answer_as_counts                              ## added
-                print("in write predictions result.answer_as_counts: ", result.answer_as_counts)       ## added
+                all_predictions[example.qas_id] = str(result.answer_as_counts)                         ## added
+                #print("in write predictions result.answer_as_counts: ", result.answer_as_counts)      ## added
             else:
                 all_predictions[example.qas_id] = best_non_null_entry.text
             all_nbest_json[example.qas_id] = nbest_json
@@ -963,11 +966,11 @@ def main():
             input_file=args.train_file, is_training=True, version_2_with_negative=args.version_2_with_negative)
 
         ## Here you could truncate the examples to have a toy set for debugging:
-        train_examples = train_examples[:100]                                                                   ## Reduce number of train examples to ????
-        print('only 100 examples for training')                                                                ## added
+        #train_examples = train_examples[:100]                                                                   ## Reduce number of train examples to ????
+        #print('only 100 examples for training')                                                                 ## added
 
         # try loading cached features
-        cached_train_features_file = args.train_file+'_count_{0}_{1}_{2}_{3}'.format(                           ## Added _count in string
+        cached_train_features_file = args.train_file+'_count_{0}_{1}_{2}_{3}'.format(                            ## Added _count in string
             list(filter(None, args.bert_model.split('/'))).pop(), str(args.max_seq_length), str(args.doc_stride), str(args.max_query_length))
         try:
             with open(cached_train_features_file, "rb") as reader:
@@ -1124,8 +1127,8 @@ def main():
             input_file=args.predict_file, is_training=False, version_2_with_negative=args.version_2_with_negative)
 
         ## Here you could truncate the dev set to have a toy set for debugging:
-        eval_examples = eval_examples[:100]                                                             ## Reduce number of dev examples to ????
-        print('only 100 examples for evaluation')
+        #eval_examples = eval_examples[:100]                                                             ## Reduce number of dev examples to ????
+        #print('only 100 examples for evaluation')
 
         eval_features = convert_examples_to_features(
             examples=eval_examples,
@@ -1164,7 +1167,7 @@ def main():
                 start_logits = batch_start_logits[i].detach().cpu().tolist()
                 end_logits = batch_end_logits[i].detach().cpu().tolist()
                 answer_as_counts = batch_answers_as_counts[i].detach().cpu().tolist()             ## added
-                print("answer_as_counts_preds from model: ", answer_as_counts)                    ## added
+                #print("answer_as_counts_preds from model: ", answer_as_counts)                   ## added
                 eval_feature = eval_features[example_index.item()]
                 unique_id = int(eval_feature.unique_id)
                 all_results.append(RawResult(unique_id=unique_id,
@@ -1172,7 +1175,7 @@ def main():
                                              end_logits=end_logits,
                                              answer_as_counts=answer_as_counts))                  ## added
 
-        #print("all_results: ", all_results)                                    ## added print
+        #print("all_results: ", all_results)                                                      ## added print
 
         output_prediction_file = os.path.join(args.output_dir, "predictions.json")
         output_nbest_file = os.path.join(args.output_dir, "nbest_predictions.json")
