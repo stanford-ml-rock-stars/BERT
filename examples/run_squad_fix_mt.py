@@ -27,6 +27,9 @@ import random
 import sys
 from io import open
 
+from dataclasses import dataclass
+from typing import List
+
 import numpy as np
 import torch
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
@@ -47,6 +50,15 @@ else:
 
 logger = logging.getLogger(__name__)
 
+@dataclass
+class SpanInfo:
+    tokens: List = None
+    start_word_position: int = None
+    end_word_position: int = None
+    char_to_word_offset: List = None
+    is_impossible: bool = None
+    orig_answer_text: str = None
+
 
 class SquadExample(object):
     """
@@ -57,22 +69,17 @@ class SquadExample(object):
     def __init__(self,
                  qas_id,
                  question_text,
-                 doc_tokens,
-                 ques_whitespace_tokens,
-                 orig_answer_text=None,
-                 start_word_position=None,
-                 end_word_position=None,
+                 question_span_info: SpanInfo,
+                 paragraph_span_info: SpanInfo,
                  is_impossible=None,
                  answer_as_counts=None):                                        ## added
         self.qas_id = qas_id
         self.question_text = question_text
-        self.doc_tokens = doc_tokens
-        self.ques_whitespace_tokens = ques_whitespace_tokens
-        self.orig_answer_text = orig_answer_text
-        self.start_word_position = start_word_position
-        self.end_word_position = end_word_position
         self.is_impossible = is_impossible
         self.answer_as_counts = answer_as_counts                                ## added
+
+        self.question_span_info = question_span_info
+        self.paragraph_span_info = paragraph_span_info
 
     def __str__(self):
         return self.__repr__()
@@ -82,16 +89,20 @@ class SquadExample(object):
         s += "qas_id: %s" % (self.qas_id)
         s += ", question_text: %s" % (
             self.question_text)
-        s += ", doc_tokens: [%s]" % (" ".join(self.doc_tokens))
-        s += ", ques_tokens: [%s]" % (" ".join(self.ques_whitespace_tokens))
-        if self.start_word_position:
-            s += ", start_position: %d" % (self.start_word_position)
-        if self.end_word_position:
-            s += ", end_position: %d" % (self.end_word_position)
         if self.is_impossible:
             s += ", is_impossible: %r" % (self.is_impossible)
         if self.answer_as_counts:
             s += ", answer_as_counts: %r" % (self.answer_as_counts)             ## added
+        s += ", paragraph_tokens: [%s]" % (" ".join(self.paragraph_span_info.tokens))
+        s += ", question_tokens:[%s]" % (" ".join(self.question_span_info.tokens))
+        if self.paragraph_span_info.start_word_position:
+            s += ", paragraph_start_position: %d" % (self.paragraph_span_info.start_word_position)
+        if self.paragraph_span_info.end_word_position:
+            s += ", paragraph_end_position: %d" % (self.paragraph_span_info.end_word_position)
+        if self.question_span_info.start_word_position:
+            s += ", question_start_position: %d" % (self.question_span_info.start_word_position)
+        if self.question_span_info.end_word_position:
+            s += ", question_end_position: %d" % (self.question_span_info.end_word_position)
         return s
 
 
@@ -110,6 +121,8 @@ class InputFeatures(object):
                  segment_ids,
                  start_position=None,
                  end_position=None,
+                 start_position_q=None,
+                 end_position_q=None,
                  is_impossible=None,
                  answer_as_counts=None):                                         ## added
         self.unique_id = unique_id
@@ -123,6 +136,8 @@ class InputFeatures(object):
         self.segment_ids = segment_ids
         self.start_position = start_position
         self.end_position = end_position
+        self.start_position_q = start_position_q
+        self.end_position_q = end_position_q
         self.is_impossible = is_impossible
         self.answer_as_counts = answer_as_counts                                ## added answer_as_counts
 
@@ -137,8 +152,25 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
             return True
         return False
 
+    def get_whitespace_tokens(texts):
+        tokens = []
+        char_to_word_offset = []
+        prev_is_whitespace = True
+        for c in texts:
+            if is_whitespace(c):
+                prev_is_whitespace = True
+            else:
+                if prev_is_whitespace:
+                    tokens.append(c)
+                else:
+                    tokens[-1] += c
+                prev_is_whitespace = False
+            char_to_word_offset.append(len(tokens) - 1)
+        return tokens, char_to_word_offset
+
     examples = []
     unmatched_answers_counter = 0                                                                 ## added
+    unmatched_question_span_answers = 0
     for entry in input_data:
         for paragraph in entry["paragraphs"]:
             paragraph_text = paragraph["context"]
@@ -158,66 +190,94 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
                     prev_is_whitespace = False
                 char_to_word_offset.append(len(doc_tokens) - 1)
 
+            paragraph_tokens, paragraph_char_to_word_offset = get_whitespace_tokens(paragraph_text)
+
             for qa in paragraph["qas"]:
                 qas_id = qa["id"]
                 question_text = qa["question"]
                 answer_as_counts = qa["answer_as_counts"][0]                    ## added
+                answers_as_paragraph_spans = qa["answers_as_passage_spans"]
+                answers_as_question_spans = qa["answers_as_question_spans"]
+
                 if answer_as_counts < 0 or answer_as_counts > 10:               ## added
                     answer_as_counts = 10                                       ## added
-                start_word_position = None
-                end_word_position = None
-                orig_answer_text = None
+
+                question_span_info = SpanInfo()
+                question_span_info.tokens, question_span_info.char_to_word_offset = get_whitespace_tokens(question_text)
+
+                paragraph_span_info = SpanInfo()
+                paragraph_span_info.tokens = paragraph_tokens
+                paragraph_span_info.char_to_word_offset = paragraph_char_to_word_offset
+
                 is_impossible = False
+
                 if is_training:
-                    if version_2_with_negative:
-                        #is_impossible = qa["is_impossible"]                    ## outcomment
-                        is_impossible = qa["answers_as_passage_spans"][0]["is_impossible"]    ## added because new json
-                        #print("check is_impossible...", is_impossible)         ## added print
-                    #if (len(qa["answers"]) != 1) and (not is_impossible):      ## outcomment
-                    if (len(qa["answers_as_passage_spans"]) != 1) and (not is_impossible):      ## added
-                        raise ValueError(
-                            "For training, each question should have exactly 1 answer.")
-                    if not is_impossible:
-                        #answer = qa["answers"][0]                              ## outcomment
-                        answer = qa["answers_as_passage_spans"][0]              ## added because new json
-                        orig_answer_text = answer["text"]
-                        answer_offset = answer["answer_start"]
-                        answer_length = len(orig_answer_text)
-                        start_word_position = char_to_word_offset[answer_offset]
-                        end_word_position = char_to_word_offset[answer_offset + answer_length - 1]
-                        # Only add answers where the text can be exactly recovered from the
-                        # document. If this CAN'T happen it's likely due to weird Unicode
-                        # stuff so we will just skip the example.
-                        #
-                        # Note that this means for training mode, every example is NOT
-                        # guaranteed to be preserved.
-                        actual_text = " ".join(doc_tokens[start_word_position:(end_word_position + 1)])
-                        cleaned_answer_text = " ".join(
-                            whitespace_tokenize(orig_answer_text))
-                        if actual_text.find(cleaned_answer_text) == -1:
-                            #logger.warning("Could not find answer: '%s' vs. '%s'",     ## outcommented because we have counter
-                                           #actual_text, cleaned_answer_text)
-                            unmatched_answers_counter += 1                                                ## added
-                            continue
-                    else:
-                        word_start_position = -1
-                        word_end_position = -1
-                        orig_answer_text = ""                                    ## outcomment - no, back to original
-                        #answer = qa["answers"][0]                               ## added - no, back after new json
-                        #orig_answer_text = answer["text"]                       ## added - no, back...
+                    def parse_spans_info(answers_as_spans, span_info: SpanInfo, with_negative):
+                        is_impossible = False
+                        if with_negative:
+                            is_impossible = answers_as_spans[0]["is_impossible"]
+                        answer_matches = True
+
+                        if not is_impossible:
+                            if len(answers_as_spans) != 1:
+                                raise ValueError("For training, each question should have exactly 1 answer.")
+
+                            orig_answer_text = answers_as_spans[0]["text"]
+                            answer_offset = answers_as_spans[0]["answer_start"]
+
+                            answer_length = len(orig_answer_text)
+                            start_word_position = span_info.char_to_word_offset[answer_offset]
+                            end_word_position = span_info.char_to_word_offset[answer_offset + answer_length -1]
+                            # Only add answers where the text can be exactly recovered from the
+                            # document. If this CAN'T happen it's likely due to weird Unicode
+                            # stuff so we will just skip the example.
+                            #
+                            # Note that this means for training mode, every example is NOT
+                            # guaranteed to be preserved.
+                            actual_text = " ".join(span_info.tokens[start_word_position:(end_word_position + 1)])
+                            cleaned_answer_text = " ".join(whitespace_tokenize(orig_answer_text))
+
+                            answer_matches = actual_text.find(cleaned_answer_text) != -1
+                        else:
+                            start_word_position = -1
+                            end_word_position = -1
+                            orig_answer_text = ""
+
+                        span_info.start_word_position = start_word_position
+                        span_info.end_word_position = end_word_position
+                        span_info.orig_answer_text = orig_answer_text
+                        span_info.is_impossible = is_impossible
+
+                        return answer_matches
+
+                    question_answer_matches = parse_spans_info(answers_as_question_spans, question_span_info, with_negative=version_2_with_negative)
+                    paragraph_answer_matches = parse_spans_info(answers_as_paragraph_spans, paragraph_span_info, with_negative=version_2_with_negative)
+
+                    if not paragraph_answer_matches:
+                        unmatched_answers_counter += 1
+                        continue
+                    if not question_answer_matches:
+                        unmatched_question_span_answers += 1
+
+                    is_impossible = question_span_info.is_impossible and paragraph_span_info.is_impossible
 
                 example = SquadExample(
                     qas_id=qas_id,
                     question_text=question_text,
-                    doc_tokens=doc_tokens,
-                    orig_answer_text=orig_answer_text,
-                    start_word_position=start_word_position,
-                    end_word_position=end_word_position,
                     is_impossible=is_impossible,
+                    ####################3
+                    # doc_tokens=paragraph_span_info.tokens,
+                    # orig_answer_text=paragraph_span_info.orig_answer_text,
+                    # start_word_position=paragraph_span_info.start_word_position,
+                    # end_word_position=paragraph_span_info.end_word_position,
+                    ####################3
+                    question_span_info=question_span_info,
+                    paragraph_span_info=paragraph_span_info,
                     answer_as_counts=answer_as_counts)                          ## added
 
                 examples.append(example)
     print("skipped examples because matching answer could not be found:  ", unmatched_answers_counter)     ## added
+    print("skipped examples because matching question span answer could not be found:  ", unmatched_question_span_answers)     ## added
     #print("print some examples...", examples[:10])                                      ## added print
     return examples
 
@@ -231,40 +291,61 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
 
     features = []
 
+    question_exceed_max_count = 0
+    question_span_answer_truncated = 0
     for (example_index, example) in enumerate(examples):
         query_tokens = tokenizer.tokenize(example.question_text)
 
         if len(query_tokens) > max_query_length:
             query_tokens = query_tokens[0:max_query_length]
+            print("============================================================================")
+            print(query_tokens)
+            print(len(query_tokens))
+            print(max_query_length)
+            question_exceed_max_count += 1
 
-        tok_to_orig_index = []
-        orig_to_tok_index = []
-        # TODO: this is the output by Tokenizer, whereas doc_tokens are output by Whitespace tokenizer(split the sentence only by whitespace)
-        # Change the variable name to make it less confusing
-        # see _improve_answer_span for an explanation.
-        all_doc_tokens = []
-        for (i, token) in enumerate(example.doc_tokens):
-            orig_to_tok_index.append(len(all_doc_tokens))
-            sub_tokens = tokenizer.tokenize(token)
-            for sub_token in sub_tokens:
-                tok_to_orig_index.append(i)
-                all_doc_tokens.append(sub_token)
+        def create_tokeninfo(span_info: SpanInfo):
+            tok_to_orig_index = []
+            orig_to_tok_index = []
+            # TODO: this is the output by Tokenizer, whereas doc_tokens are output by Whitespace tokenizer(split the sentence only by whitespace)
+            # Change the variable name to make it less confusing
+            # see _improve_answer_span for an explanation.
+            all_doc_tokens = []
+            for (i, token) in enumerate(span_info.tokens):
+                orig_to_tok_index.append(len(all_doc_tokens))
+                sub_tokens = tokenizer.tokenize(token)
+                for sub_token in sub_tokens:
+                    tok_to_orig_index.append(i)
+                    all_doc_tokens.append(sub_token)
 
-        # get start end position for the new tokens
-        tok_start_position = None
-        tok_end_position = None
-        if is_training and example.is_impossible:
-            tok_start_position = -1
-            tok_end_position = -1
-        if is_training and not example.is_impossible:
-            tok_start_position = orig_to_tok_index[example.start_word_position]
-            if example.end_word_position < len(example.doc_tokens) - 1:
-                tok_end_position = orig_to_tok_index[example.end_word_position + 1] - 1
-            else:
-                tok_end_position = len(all_doc_tokens) - 1
-            (tok_start_position, tok_end_position) = _improve_answer_span(
-                all_doc_tokens, tok_start_position, tok_end_position, tokenizer,
-                example.orig_answer_text)
+            # get start end position for the new tokens
+            tok_start_position = None
+            tok_end_position = None
+            if is_training and span_info.is_impossible:
+                tok_start_position = -1
+                tok_end_position = -1
+            if is_training and not span_info.is_impossible:
+                tok_start_position = orig_to_tok_index[span_info.start_word_position]
+                if span_info.end_word_position < len(span_info.tokens) - 1:
+                    tok_end_position = orig_to_tok_index[span_info.end_word_position + 1] - 1
+                else:
+                    tok_end_position = len(all_doc_tokens) - 1
+                (tok_start_position, tok_end_position) = _improve_answer_span(
+                    all_doc_tokens, tok_start_position, tok_end_position, tokenizer,
+                    span_info.orig_answer_text)
+
+            return tok_start_position, tok_end_position, all_doc_tokens, tok_to_orig_index, orig_to_tok_index
+
+        tok_start_position_q, tok_end_position_q, all_doc_tokens_q, _, _ = create_tokeninfo(example.question_span_info)
+        tok_start_position_p, tok_end_position_p, all_doc_tokens_p, tok_to_orig_index_p, orig_to_tok_index_p = create_tokeninfo(example.paragraph_span_info)
+
+        # some of the questions are truncated
+        if tok_end_position_q >= len(query_tokens):
+            print(tok_end_position_q)
+            print(len(query_tokens))
+            tok_end_position_q = -1
+            tok_start_position_q = -1
+            question_span_answer_truncated += 1
 
         # The -3 accounts for [CLS], [SEP] and [SEP]
         max_tokens_for_doc = max_seq_length - len(query_tokens) - 3
@@ -272,31 +353,33 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
         # We can have documents that are longer than the maximum sequence length.
         # To deal with this we do a sliding window approach, where we take chunks
         # of the up to our max length with a stride of `doc_stride`.
-        '''
-        For answers as question spans, we still do the sliding window approach for passages longer than max length. 
-        This way we will generate more training examples.
-        '''
+        """
+        We do NOT do the same for question span because there are no questions that exceed the maximum length in the training set.
+        Therefore we assume the same for the dev and test set.
+        """
         _DocSpan = collections.namedtuple(  # pylint: disable=invalid-name
             "DocSpan", ["start", "length"])
+
         doc_spans = []
         start_offset = 0
-        while start_offset < len(all_doc_tokens):
-            length = len(all_doc_tokens) - start_offset
+        while start_offset < len(all_doc_tokens_p):
+            length = len(all_doc_tokens_p) - start_offset
             if length > max_tokens_for_doc:
                 length = max_tokens_for_doc
             doc_spans.append(_DocSpan(start=start_offset, length=length))
-            if start_offset + length == len(all_doc_tokens):
+            if start_offset + length == len(all_doc_tokens_p):
                 break
             start_offset += min(length, doc_stride)
 
         for (doc_span_index, doc_span) in enumerate(doc_spans):
+            # the final input tokens to BERT, contains both quesiton and passage
             tokens = []
             # a map with the key being the passage index of the final token array, value being the whitespace tokenized passage index
             token_to_orig_map = {}
             token_is_max_context = {}
+            # segment type of each token, 0 is question, 1 is passage
             segment_ids = []
             tokens.append("[CLS]")
-            # segment type of each token, 0 is question, 1 is passage
             segment_ids.append(0)
             for token in query_tokens:
                 tokens.append(token)
@@ -306,13 +389,13 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
 
             for i in range(doc_span.length):
                 split_token_index = doc_span.start + i
-                token_to_orig_map[len(tokens)] = tok_to_orig_index[split_token_index]
+                token_to_orig_map[len(tokens)] = tok_to_orig_index_p[split_token_index]
 
                 # whether this DocSpan is the right one to look at for this split_token_index
                 is_max_context = _check_is_max_context(doc_spans, doc_span_index,
                                                        split_token_index)
                 token_is_max_context[len(tokens)] = is_max_context
-                tokens.append(all_doc_tokens[split_token_index])
+                tokens.append(all_doc_tokens_p[split_token_index])
                 segment_ids.append(1)
             tokens.append("[SEP]")
             segment_ids.append(1)
@@ -343,16 +426,16 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
                 doc_start = doc_span.start
                 doc_end = doc_span.start + doc_span.length - 1
                 out_of_span = False
-                if not (tok_start_position >= doc_start and
-                        tok_end_position <= doc_end):
+                if not (tok_start_position_p >= doc_start and
+                        tok_end_position_p <= doc_end):
                     out_of_span = True
                 if out_of_span:
                     start_position = 0
                     end_position = 0
                 else:
                     doc_offset = len(query_tokens) + 2
-                    start_position = tok_start_position - doc_start + doc_offset
-                    end_position = tok_end_position - doc_start + doc_offset
+                    start_position = tok_start_position_p - doc_start + doc_offset
+                    end_position = tok_end_position_p - doc_start + doc_offset
             if is_training and example.is_impossible:
                 start_position = 0
                 end_position = 0
@@ -373,16 +456,26 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
                     "input_mask: %s" % " ".join([str(x) for x in input_mask]))
                 logger.info(
                     "segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
-                if is_training and example.is_impossible:
+                if is_training and example.paragraph_span_info.is_impossible:
                     logger.info("impossible example")
-                    logger.info("answer: %s" % (example.orig_answer_text))              ## added example.orig_
-                if is_training and not example.is_impossible:
+                    logger.info("answer: %s" % (example.question_span_info.orig_answer_text))              ## added example.orig_
+                if is_training and not example.paragraph_span_info.is_impossible:
                     answer_text = " ".join(tokens[start_position:(end_position + 1)])
                     logger.info("start_position: %d" % (start_position))
                     logger.info("end_position: %d" % (end_position))
-                    logger.info(
-                        "answer: %s" % (answer_text))
+                    logger.info("answer: %s" % (answer_text))
+                if is_training and not example.question_span_info.is_impossible:
+                    answer_text = " ".join(tokens[tok_start_position_q:(tok_end_position_q + 1)])
+                    logger.info("start_position: %d" % (tok_start_position_q))
+                    logger.info("end_position: %d" % (tok_end_position_q))
+                    logger.info("answer: %s" % (answer_text))
 
+            if tok_start_position_q == -1 and tok_end_position_q == -1:
+                start_position_q = 0
+                end_position_q = 0
+            else:
+                start_position_q = tok_start_position_q + 1
+                end_position_q = tok_end_position_q + 1
             features.append(
                 InputFeatures(
                     unique_id=unique_id,
@@ -396,10 +489,14 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
                     segment_ids=segment_ids,
                     start_position=start_position,
                     end_position=end_position,
+                    start_position_q=start_position_q,
+                    end_position_q=end_position_q,
                     is_impossible=example.is_impossible,
                     answer_as_counts=example.answer_as_counts))                 ## added
             unique_id += 1
 
+    print("there are ", question_exceed_max_count, "questions exceeding the max length")
+    print("there are ", question_span_answer_truncated, "questions span got truncated")
     return features
 
 
@@ -1002,9 +1099,11 @@ def main():
         all_segment_ids = torch.tensor([f.segment_ids for f in train_features], dtype=torch.long)
         all_start_positions = torch.tensor([f.start_position for f in train_features], dtype=torch.long)
         all_end_positions = torch.tensor([f.end_position for f in train_features], dtype=torch.long)
+        all_start_positions_q = torch.tensor([f.start_position_q for f in train_features], dtype=torch.long)
+        all_end_positions_q = torch.tensor([f.end_position_q for f in train_features], dtype=torch.long)
         all_answers_as_counts = torch.tensor([f.answer_as_counts for f in train_features], dtype=torch.long)     ## added answers_as_counts tensor long
         train_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids,
-                                   all_start_positions, all_end_positions, all_answers_as_counts)                ## added all_answers_as_counts
+                                   all_start_positions, all_end_positions, all_start_positions_q, all_end_positions_q, all_answers_as_counts)                ## added all_answers_as_counts
 
         #print("saving feature_check...")                                                                        ## added print
         #feature_check = np.column_stack((all_start_positions, all_end_positions, all_answers_as_counts))        ## Added
@@ -1073,8 +1172,8 @@ def main():
             for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])):
                 if n_gpu == 1:
                     batch = tuple(t.to(device) for t in batch) # multi-gpu does scattering it-self
-                input_ids, input_mask, segment_ids, start_positions, end_positions, answers_as_counts = batch          ## added answers_as_counts
-                loss = model(input_ids, segment_ids, input_mask, start_positions, end_positions, answers_as_counts)    ## added answers_as_counts
+                input_ids, input_mask, segment_ids, start_positions, end_positions, start_position_q, end_position_q, answers_as_counts = batch          ## added answers_as_counts
+                loss = model(input_ids, segment_ids, input_mask, start_positions, end_positions, start_position_q, end_position_q, answers_as_counts)    ## added answers_as_counts
 
                 #losses.append(loss.item())                                                             ## Added
                 #classification_losses.append(classification_loss.item())                               ## Added

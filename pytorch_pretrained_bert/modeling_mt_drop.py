@@ -1242,7 +1242,7 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
 
         # TODO check with Google if it's normal there is no dropout on the token classifier of SQuAD in the TF version
         # self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.qa_outputs = nn.Linear(config.hidden_size, 2)
+        self.qa_outputs = nn.Linear(config.hidden_size, 4)
         self.apply(self.init_bert_weights)
 
         self.classification_1 = nn.Linear(config.hidden_size*self.max_seq_length, 64)   ## Added linear layer for digit classification
@@ -1250,7 +1250,7 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
         self.classification_2 = nn.Linear(64, 11)                                       ## Added second linear layer with N+1 classes
         #self.numbers_weights = torch.tensor([0.5,2,2,2,2,2,2,2,2,0.5])                 ## weights for number CrossEntropy
 
-    def forward(self, input_ids, token_type_ids=None, attention_mask=None, start_positions=None, end_positions=None, answers_as_counts=None):     ## added answers_as_counts
+    def forward(self, input_ids, token_type_ids=None, attention_mask=None, start_positions=None, end_positions=None, start_position_q=None, end_position_q=None, answers_as_counts=None):     ## added answers_as_counts
         sequence_output, _ = self.bert(input_ids, token_type_ids, attention_mask, output_all_encoded_layers=False)
         logits = self.qa_outputs(sequence_output)
         start_logits, end_logits = logits.split(1, dim=-1)
