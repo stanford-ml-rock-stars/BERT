@@ -67,6 +67,7 @@ def convert(drop_data_path,
                 # there might be multiple entries for count answer. Therefore the length is not fixed.
                 # can be empty if the count is outside 0~9
                 answers["counting"] = metadata["counting"]
+                assert(len(metadata["counting"]) < 2)
             if not answers["counting"]:
                 answers["counting"] = [-1]
 

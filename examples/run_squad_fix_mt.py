@@ -58,17 +58,19 @@ class SquadExample(object):
                  qas_id,
                  question_text,
                  doc_tokens,
+                 ques_whitespace_tokens,
                  orig_answer_text=None,
-                 start_position=None,
-                 end_position=None,
+                 start_word_position=None,
+                 end_word_position=None,
                  is_impossible=None,
                  answer_as_counts=None):                                        ## added
         self.qas_id = qas_id
         self.question_text = question_text
         self.doc_tokens = doc_tokens
+        self.ques_whitespace_tokens = ques_whitespace_tokens
         self.orig_answer_text = orig_answer_text
-        self.start_position = start_position
-        self.end_position = end_position
+        self.start_word_position = start_word_position
+        self.end_word_position = end_word_position
         self.is_impossible = is_impossible
         self.answer_as_counts = answer_as_counts                                ## added
 
@@ -81,10 +83,11 @@ class SquadExample(object):
         s += ", question_text: %s" % (
             self.question_text)
         s += ", doc_tokens: [%s]" % (" ".join(self.doc_tokens))
-        if self.start_position:
-            s += ", start_position: %d" % (self.start_position)
-        if self.end_position:
-            s += ", end_position: %d" % (self.end_position)
+        s += ", ques_tokens: [%s]" % (" ".join(self.ques_whitespace_tokens))
+        if self.start_word_position:
+            s += ", start_position: %d" % (self.start_word_position)
+        if self.end_word_position:
+            s += ", end_position: %d" % (self.end_word_position)
         if self.is_impossible:
             s += ", is_impossible: %r" % (self.is_impossible)
         if self.answer_as_counts:
@@ -140,6 +143,7 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
         for paragraph in entry["paragraphs"]:
             paragraph_text = paragraph["context"]
 
+            # tokens of passage separate by whitespace
             doc_tokens = []
             char_to_word_offset = []
             prev_is_whitespace = True
@@ -160,8 +164,8 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
                 answer_as_counts = qa["answer_as_counts"][0]                    ## added
                 if answer_as_counts < 0 or answer_as_counts > 10:               ## added
                     answer_as_counts = 10                                       ## added
-                start_position = None
-                end_position = None
+                start_word_position = None
+                end_word_position = None
                 orig_answer_text = None
                 is_impossible = False
                 if is_training:
@@ -179,15 +183,15 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
                         orig_answer_text = answer["text"]
                         answer_offset = answer["answer_start"]
                         answer_length = len(orig_answer_text)
-                        start_position = char_to_word_offset[answer_offset]
-                        end_position = char_to_word_offset[answer_offset + answer_length - 1]
+                        start_word_position = char_to_word_offset[answer_offset]
+                        end_word_position = char_to_word_offset[answer_offset + answer_length - 1]
                         # Only add answers where the text can be exactly recovered from the
                         # document. If this CAN'T happen it's likely due to weird Unicode
                         # stuff so we will just skip the example.
                         #
                         # Note that this means for training mode, every example is NOT
                         # guaranteed to be preserved.
-                        actual_text = " ".join(doc_tokens[start_position:(end_position + 1)])
+                        actual_text = " ".join(doc_tokens[start_word_position:(end_word_position + 1)])
                         cleaned_answer_text = " ".join(
                             whitespace_tokenize(orig_answer_text))
                         if actual_text.find(cleaned_answer_text) == -1:
@@ -196,8 +200,8 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
                             unmatched_answers_counter += 1                                                ## added
                             continue
                     else:
-                        start_position = -1
-                        end_position = -1
+                        word_start_position = -1
+                        word_end_position = -1
                         orig_answer_text = ""                                    ## outcomment - no, back to original
                         #answer = qa["answers"][0]                               ## added - no, back after new json
                         #orig_answer_text = answer["text"]                       ## added - no, back...
@@ -207,8 +211,8 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
                     question_text=question_text,
                     doc_tokens=doc_tokens,
                     orig_answer_text=orig_answer_text,
-                    start_position=start_position,
-                    end_position=end_position,
+                    start_word_position=start_word_position,
+                    end_word_position=end_word_position,
                     is_impossible=is_impossible,
                     answer_as_counts=answer_as_counts)                          ## added
 
@@ -237,7 +241,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
         orig_to_tok_index = []
         # TODO: this is the output by Tokenizer, whereas doc_tokens are output by Whitespace tokenizer(split the sentence only by whitespace)
         # Change the variable name to make it less confusing
-        # Look at _improve_answer_span for an explanation.
+        # see _improve_answer_span for an explanation.
         all_doc_tokens = []
         for (i, token) in enumerate(example.doc_tokens):
             orig_to_tok_index.append(len(all_doc_tokens))
@@ -246,16 +250,16 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
                 tok_to_orig_index.append(i)
                 all_doc_tokens.append(sub_token)
 
-        # token index
+        # get start end position for the new tokens
         tok_start_position = None
         tok_end_position = None
         if is_training and example.is_impossible:
             tok_start_position = -1
             tok_end_position = -1
         if is_training and not example.is_impossible:
-            tok_start_position = orig_to_tok_index[example.start_position]
-            if example.end_position < len(example.doc_tokens) - 1:
-                tok_end_position = orig_to_tok_index[example.end_position + 1] - 1
+            tok_start_position = orig_to_tok_index[example.start_word_position]
+            if example.end_word_position < len(example.doc_tokens) - 1:
+                tok_end_position = orig_to_tok_index[example.end_word_position + 1] - 1
             else:
                 tok_end_position = len(all_doc_tokens) - 1
             (tok_start_position, tok_end_position) = _improve_answer_span(
@@ -268,6 +272,10 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
         # We can have documents that are longer than the maximum sequence length.
         # To deal with this we do a sliding window approach, where we take chunks
         # of the up to our max length with a stride of `doc_stride`.
+        '''
+        For answers as question spans, we still do the sliding window approach for passages longer than max length. 
+        This way we will generate more training examples.
+        '''
         _DocSpan = collections.namedtuple(  # pylint: disable=invalid-name
             "DocSpan", ["start", "length"])
         doc_spans = []
@@ -326,7 +334,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
             assert len(input_mask) == max_seq_length
             assert len(segment_ids) == max_seq_length
 
-            # the start and end positions of each DocSpan
+            # the start and end positions in each DocSpan
             start_position = None
             end_position = None
             if is_training and not example.is_impossible:
