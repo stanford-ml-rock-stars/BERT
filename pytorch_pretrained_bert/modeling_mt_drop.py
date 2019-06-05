@@ -1265,12 +1265,6 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
         start_logits_p = start_logits_p.squeeze(-1)
         end_logits_p = end_logits_p.squeeze(-1)
 
-        print('shape of logits', logits.size())
-        print('shape of start_logits_q', start_logits_q)
-        print('shape of start_logits_p', start_logits_p)
-        print('shape of start_positions', start_positions)
-        print('shape of start_positions_q', start_positions_q)
-
         classification_input = sequence_output.view(sequence_output.size()[0], -1)    ## Reshape into (batch, hidden_size x max_seq_length)
         class_logits = self.classification_1(classification_input)                    ## Added for classification
         class_logits = self.relu(class_logits)                                        ## Added for classification
@@ -1287,7 +1281,7 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
         #print('raw start_positions:... ', start_positions)                     ## Added print
         #print('raw answers_as_counts: ', answers_as_counts)                    ## Added print
 
-        # [batch_size, 1]
+        # [batch_size]
         if start_positions is not None and end_positions is not None:
             # If we are on multi-GPU, split add a dimension
             if len(start_positions.size()) > 1:
@@ -1302,8 +1296,8 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
             ignored_index = start_logits_p.size(1)
             start_positions.clamp_(0, ignored_index)
             end_positions.clamp_(0, ignored_index)
-            start_position_q.clamp_(0, ignored_index)
-            start_position_q.clamp_(0, ignored_index)
+            start_positions_q.clamp_(0, ignored_index)
+            start_positions_q.clamp_(0, ignored_index)
 
             loss_fct_1 = CrossEntropyLoss(ignore_index=ignored_index)
             #loss_fct_2 = CrossEntropyLoss(weight=self.numbers_weights)         ## Added loss function

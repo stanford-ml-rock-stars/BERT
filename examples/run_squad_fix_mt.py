@@ -27,7 +27,6 @@ import random
 import sys
 from io import open
 
-from dataclasses import dataclass
 from typing import List
 
 import numpy as np
@@ -50,15 +49,14 @@ else:
 
 logger = logging.getLogger(__name__)
 
-@dataclass
-class SpanInfo:
-    tokens: List = None
-    start_word_position: int = None
-    end_word_position: int = None
-    char_to_word_offset: List = None
-    is_impossible: bool = None
-    orig_answer_text: str = None
-
+class SpanInfo(object):
+    def __init__(self):
+        self.tokens = None
+        self.start_word_position = None
+        self.end_word_position = None
+        self.char_to_word_offset = None
+        self.is_impossible = None
+        self.orig_answer_text = None
 
 class SquadExample(object):
     """
@@ -340,7 +338,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
         tok_start_position_p, tok_end_position_p, all_doc_tokens_p, tok_to_orig_index_p, orig_to_tok_index_p = create_tokeninfo(example.paragraph_span_info)
 
         # some of the questions are truncated
-        if tok_end_position_q >= len(query_tokens):
+        if tok_end_position_q is not None and tok_end_position_q >= len(query_tokens):
             print(tok_end_position_q)
             print(len(query_tokens))
             tok_end_position_q = -1
@@ -420,6 +418,8 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
             # the start and end positions in each DocSpan
             start_position = None
             end_position = None
+            start_position_q = None
+            end_position_q = None
             if is_training and not example.is_impossible:
                 # For training, if our document chunk does not contain an annotation
                 # we throw it out, since there is nothing to predict.
@@ -470,12 +470,13 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
                     logger.info("end_position: %d" % (tok_end_position_q))
                     logger.info("answer: %s" % (answer_text))
 
-            if tok_start_position_q == -1 and tok_end_position_q == -1:
-                start_position_q = 0
-                end_position_q = 0
-            else:
-                start_position_q = tok_start_position_q + 1
-                end_position_q = tok_end_position_q + 1
+            if is_training: 
+                if tok_start_position_q == -1 and tok_end_position_q == -1:
+                    start_position_q = 0
+                    end_position_q = 0
+                else:
+                    start_position_q = tok_start_position_q + 1
+                    end_position_q = tok_end_position_q + 1
             features.append(
                 InputFeatures(
                     unique_id=unique_id,
