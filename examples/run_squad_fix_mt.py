@@ -575,7 +575,7 @@ def _check_is_max_context(doc_spans, cur_span_index, position):
 
 
 RawResult = collections.namedtuple("RawResult",
-                                   ["unique_id", "start_logits", "end_logits", "answer_as_counts"])      ## added answer_as_counts
+                                   ["unique_id", "start_logits", "end_logits", "start_logits_q", "end_logits_q", "answer_as_counts"])      ## added answer_as_counts
 
 
 def write_predictions(all_examples, all_features, all_results, n_best_size,
@@ -618,6 +618,8 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
             result = unique_id_to_result[feature.unique_id]
             start_indexes = _get_best_indexes(result.start_logits, n_best_size)
             end_indexes = _get_best_indexes(result.end_logits, n_best_size)
+            start_indexes_q = _get_best_indexes(result.start_logits_q, n_best_size)
+            end_indexes_q = _get_best_indexes(result.end_logits_q, n_best_size)
             # if we could have irrelevant answers, get the min score of irrelevant
             if version_2_with_negative:
                 feature_null_score = result.start_logits[0] + result.end_logits[0]
@@ -628,6 +630,33 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
                     null_end_logit = result.end_logits[0]
             for start_index in start_indexes:
                 for end_index in end_indexes:
+                    # We could hypothetically create invalid predictions, e.g., predict
+                    # that the start of the span is in the question. We throw out all
+                    # invalid predictions.
+                    if start_index >= len(feature.tokens):
+                        continue
+                    if end_index >= len(feature.tokens):
+                        continue
+                    if start_index not in feature.token_to_orig_map:
+                        continue
+                    if end_index not in feature.token_to_orig_map:
+                        continue
+                    if not feature.token_is_max_context.get(start_index, False):
+                        continue
+                    if end_index < start_index:
+                        continue
+                    length = end_index - start_index + 1
+                    if length > max_answer_length:
+                        continue
+                    prelim_predictions.append(
+                        _PrelimPrediction(
+                            feature_index=feature_index,
+                            start_index=start_index,
+                            end_index=end_index,
+                            start_logit=result.start_logits[start_index],
+                            end_logit=result.end_logits[end_index]))
+            for start_index in start_indexes_q:
+                for end_index in end_indexes_q:
                     # We could hypothetically create invalid predictions, e.g., predict
                     # that the start of the span is in the question. We throw out all
                     # invalid predictions.
@@ -1269,17 +1298,22 @@ def main():
             input_mask = input_mask.to(device)
             segment_ids = segment_ids.to(device)
             with torch.no_grad():
-                batch_start_logits, batch_end_logits, batch_answers_as_counts = model(input_ids, segment_ids, input_mask)       ## added batch_answers_as_counts
+                batch_start_logits_p, batch_end_logits_p, batch_start_logits_q, batch_end_logits_q, batch_answers_as_counts = \
+                    model(input_ids, segment_ids, input_mask)       ## added batch_answers_as_counts
             for i, example_index in enumerate(example_indices):
-                start_logits = batch_start_logits[i].detach().cpu().tolist()
-                end_logits = batch_end_logits[i].detach().cpu().tolist()
+                start_logits_p = batch_start_logits_p[i].detach().cpu().tolist()
+                end_logits_p = batch_end_logits_p[i].detach().cpu().tolist()
+                start_logits_q = batch_start_logits_q[i].detach().cpu().tolist()
+                end_logits_q = batch_end_logits_q[i].detach().cpu().tolist()
                 answer_as_counts = batch_answers_as_counts[i].detach().cpu().tolist()             ## added
                 #print("answer_as_counts_preds from model: ", answer_as_counts)                   ## added
                 eval_feature = eval_features[example_index.item()]
                 unique_id = int(eval_feature.unique_id)
                 all_results.append(RawResult(unique_id=unique_id,
-                                             start_logits=start_logits,
-                                             end_logits=end_logits,
+                                             start_logits=start_logits_p,
+                                             end_logits=end_logits_p,
+                                             start_logits_q=start_logits_q,
+                                             end_logits_q=end_logits_q,
                                              answer_as_counts=answer_as_counts))                  ## added
 
         #print("all_results: ", all_results)                                                      ## added print

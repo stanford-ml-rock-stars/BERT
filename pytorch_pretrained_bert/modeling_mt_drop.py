@@ -1242,6 +1242,8 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
 
         # TODO check with Google if it's normal there is no dropout on the token classifier of SQuAD in the TF version
         # self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        # 4 outputs for spans in question and paragraph
+        # (start_q, end_q), (start_p, end_p)
         self.qa_outputs = nn.Linear(config.hidden_size, 4)
         self.apply(self.init_bert_weights)
 
@@ -1250,12 +1252,24 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
         self.classification_2 = nn.Linear(64, 11)                                       ## Added second linear layer with N+1 classes
         #self.numbers_weights = torch.tensor([0.5,2,2,2,2,2,2,2,2,0.5])                 ## weights for number CrossEntropy
 
-    def forward(self, input_ids, token_type_ids=None, attention_mask=None, start_positions=None, end_positions=None, start_position_q=None, end_position_q=None, answers_as_counts=None):     ## added answers_as_counts
+    def forward(self, input_ids, token_type_ids=None, attention_mask=None, start_positions=None, end_positions=None, start_positions_q=None, end_positions_q=None, answers_as_counts=None):     ## added answers_as_counts
+        # [batch_size, sequence_length, hidden_size]
         sequence_output, _ = self.bert(input_ids, token_type_ids, attention_mask, output_all_encoded_layers=False)
+        # [batch_size, sequence_length, 4]
         logits = self.qa_outputs(sequence_output)
-        start_logits, end_logits = logits.split(1, dim=-1)
-        start_logits = start_logits.squeeze(-1)
-        end_logits = end_logits.squeeze(-1)
+        # [batch_size, sequence_length, 1]
+        start_logits_q, end_logits_q, start_logits_p, end_logits_p = logits.split(1, dim=-1)
+        # [batch_size, sequence_length]
+        start_logits_q = start_logits_q.squeeze(-1)
+        end_logits_q = end_logits_q.squeeze(-1)
+        start_logits_p = start_logits_p.squeeze(-1)
+        end_logits_p = end_logits_p.squeeze(-1)
+
+        print('shape of logits', logits.size())
+        print('shape of start_logits_q', start_logits_q)
+        print('shape of start_logits_p', start_logits_p)
+        print('shape of start_positions', start_positions)
+        print('shape of start_positions_q', start_positions_q)
 
         classification_input = sequence_output.view(sequence_output.size()[0], -1)    ## Reshape into (batch, hidden_size x max_seq_length)
         class_logits = self.classification_1(classification_input)                    ## Added for classification
@@ -1273,28 +1287,37 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
         #print('raw start_positions:... ', start_positions)                     ## Added print
         #print('raw answers_as_counts: ', answers_as_counts)                    ## Added print
 
+        # [batch_size, 1]
         if start_positions is not None and end_positions is not None:
             # If we are on multi-GPU, split add a dimension
             if len(start_positions.size()) > 1:
                 start_positions = start_positions.squeeze(-1)
             if len(end_positions.size()) > 1:
                 end_positions = end_positions.squeeze(-1)
+            if len(start_positions_q.size()) > 1:
+                start_position_q = start_positions_q.squeeze(-1)
+            if len(end_positions_q.size()) > 1:
+                end_position_q = end_positions_q.squeeze(-1)
             # sometimes the start/end positions are outside our model inputs, we ignore these terms
-            ignored_index = start_logits.size(1)
+            ignored_index = start_logits_p.size(1)
             start_positions.clamp_(0, ignored_index)
             end_positions.clamp_(0, ignored_index)
+            start_position_q.clamp_(0, ignored_index)
+            start_position_q.clamp_(0, ignored_index)
 
             loss_fct_1 = CrossEntropyLoss(ignore_index=ignored_index)
             #loss_fct_2 = CrossEntropyLoss(weight=self.numbers_weights)         ## Added loss function
             loss_fct_2 = CrossEntropyLoss(ignore_index=10)                      ## Added loss function, ignore loss for class 10
-            start_loss = loss_fct_1(start_logits, start_positions)
-            end_loss = loss_fct_1(end_logits, end_positions)
+            start_loss_p = loss_fct_1(start_logits_p, start_positions)
+            end_loss_p = loss_fct_1(end_logits_p, end_positions)
+            start_loss_q = loss_fct_1(start_logits_q, start_positions_q)
+            end_loss_q = loss_fct_1(end_logits_q, end_positions_q)
             classification_loss = loss_fct_2(class_logits, answers_as_counts)   ## Added classification loss
 
             #hits = torch.eq(number_preds, numbers).float()                     ## added hits
             #accuracy = torch.mean(hits)                                        ## Added accuracy
 
-            total_loss = (start_loss + end_loss + classification_loss) / 3      ## Added classification_loss and changed denominator to 3
+            total_loss = (start_loss_p + end_loss_p + start_loss_q + end_loss_q + classification_loss) / 5      ## Added classification_loss and changed denominator to 3
             return total_loss #, classification_loss, accuracy                  ## Added all (except total_loss)
         else:
-            return start_logits, end_logits, answers_as_counts_preds            ## added answers_as_counts_preds
+            return start_logits_p, end_logits_p, start_logits_q, end_logits_q, answers_as_counts_preds            ## added answers_as_counts_preds
