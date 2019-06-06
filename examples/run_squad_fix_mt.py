@@ -112,11 +112,13 @@ class InputFeatures(object):
                  example_index,
                  doc_span_index,
                  tokens,
+                 token_to_orig_map_q,
                  token_to_orig_map,
                  token_is_max_context,
                  input_ids,
                  input_mask,
                  segment_ids,
+                 question_end_index,
                  start_position=None,
                  end_position=None,
                  start_position_q=None,
@@ -127,11 +129,13 @@ class InputFeatures(object):
         self.example_index = example_index
         self.doc_span_index = doc_span_index
         self.tokens = tokens
+        self.token_to_orig_map_q = token_to_orig_map_q
         self.token_to_orig_map = token_to_orig_map
         self.token_is_max_context = token_is_max_context
         self.input_ids = input_ids
         self.input_mask = input_mask
         self.segment_ids = segment_ids
+        self.question_end_index = question_end_index
         self.start_position = start_position
         self.end_position = end_position
         self.start_position_q = start_position_q
@@ -334,7 +338,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
 
             return tok_start_position, tok_end_position, all_doc_tokens, tok_to_orig_index, orig_to_tok_index
 
-        tok_start_position_q, tok_end_position_q, all_doc_tokens_q, _, _ = create_tokeninfo(example.question_span_info)
+        tok_start_position_q, tok_end_position_q, all_doc_tokens_q, tok_to_orig_index_q, _ = create_tokeninfo(example.question_span_info)
         tok_start_position_p, tok_end_position_p, all_doc_tokens_p, tok_to_orig_index_p, orig_to_tok_index_p = create_tokeninfo(example.paragraph_span_info)
 
         # some of the questions are truncated
@@ -374,12 +378,16 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
             tokens = []
             # a map with the key being the passage index of the final token array, value being the whitespace tokenized passage index
             token_to_orig_map = {}
+            token_to_orig_map_q = {}
             token_is_max_context = {}
             # segment type of each token, 0 is question, 1 is passage
             segment_ids = []
             tokens.append("[CLS]")
             segment_ids.append(0)
-            for token in query_tokens:
+            for i, token in enumerate(query_tokens):
+                assert(token == all_doc_tokens_q[i])
+                assert(len(tokens) == i + 1)
+                token_to_orig_map_q[len(tokens)] = tok_to_orig_index_q[i]
                 tokens.append(token)
                 segment_ids.append(0)
             tokens.append("[SEP]")
@@ -483,11 +491,13 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
                     example_index=example_index,
                     doc_span_index=doc_span_index,
                     tokens=tokens,
+                    token_to_orig_map_q=token_to_orig_map_q,
                     token_to_orig_map=token_to_orig_map,
                     token_is_max_context=token_is_max_context,
                     input_ids=input_ids,
                     input_mask=input_mask,
                     segment_ids=segment_ids,
+                    question_end_index=len(query_tokens),
                     start_position=start_position,
                     end_position=end_position,
                     start_position_q=start_position_q,
@@ -512,7 +522,7 @@ def _improve_answer_span(doc_tokens, input_start, input_end, tokenizer,
     #   Question: What year was John Smith born?
     #   Context: The leader was John Smith (1895-1943).
     #   Answer: 1895
-    #
+    
     # The original whitespace-tokenized answer will be "(1895-1943).". However
     # after tokenization, our tokens will be "( 1895 - 1943 ) .". So we can match
     # the exact answer, 1895.
@@ -587,6 +597,7 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
     logger.info("Writing predictions to: %s" % (output_prediction_file))
     logger.info("Writing nbest to: %s" % (output_nbest_file))
 
+    # there can be multiple feature objects per example because we do sliding window for over-sized passages.
     example_index_to_features = collections.defaultdict(list)
     for feature in all_features:
         example_index_to_features[feature.example_index].append(feature)
@@ -602,6 +613,7 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
     all_predictions = collections.OrderedDict()
     all_nbest_json = collections.OrderedDict()
     scores_diff_json = collections.OrderedDict()
+    scores_diff_json_q = collections.OrderedDict()
 
     for (example_index, example) in enumerate(all_examples):
         features = example_index_to_features[example_index]
@@ -609,26 +621,38 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
         #print("features :", features)                                           ## added print
         #print("result.unique_id :", result.unique_id)                           ## added print
 
+        # for passage and null answer
         prelim_predictions = []
+        # for question
+        prelim_predictions_q = []
         # keep track of the minimum score of null start+end of position 0
+        # the reason to keep the minimum score instead of the maximum is that some slice might not contain the answer span
+        # therefore the probability of no answer(null logits) will be very high for that slice.
         score_null = 1000000  # large and positive
         min_null_feature_index = 0  # the paragraph slice with min null score
         null_start_logit = 0  # the start logit at the slice with min null score
         null_end_logit = 0  # the end logit at the slice with min null score
         for (feature_index, feature) in enumerate(features):
             result = unique_id_to_result[feature.unique_id]
+            # sorted in descending order, 
             start_indexes = _get_best_indexes(result.start_logits, n_best_size)
             end_indexes = _get_best_indexes(result.end_logits, n_best_size)
             start_indexes_q = _get_best_indexes(result.start_logits_q, n_best_size)
             end_indexes_q = _get_best_indexes(result.end_logits_q, n_best_size)
+            assert(len(start_indexes_q) > 0)
+            print("len of start_logits_q", len(result.start_logits_q))
+            print("len of start_logits", len(result.start_logits))
+            print("len of feature.tokens", len(feature.tokens))
             # if we could have irrelevant answers, get the min score of irrelevant
             if version_2_with_negative:
+                # get the combined score for the [CLS] token, which means there is no answer 
                 feature_null_score = result.start_logits[0] + result.end_logits[0]
                 if feature_null_score < score_null:
                     score_null = feature_null_score
                     min_null_feature_index = feature_index
                     null_start_logit = result.start_logits[0]
                     null_end_logit = result.end_logits[0]
+
             for start_index in start_indexes:
                 for end_index in end_indexes:
                     # We could hypothetically create invalid predictions, e.g., predict
@@ -656,6 +680,8 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
                             end_index=end_index,
                             start_logit=result.start_logits[start_index],
                             end_logit=result.end_logits[end_index]))
+
+            # select all the valid combinations of start and end positions of the question
             for start_index in start_indexes_q:
                 for end_index in end_indexes_q:
                     # We could hypothetically create invalid predictions, e.g., predict
@@ -665,24 +691,35 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
                         continue
                     if end_index >= len(feature.tokens):
                         continue
+                    # there is no sliding window for question span
+                    '''
                     if start_index not in feature.token_to_orig_map:
                         continue
                     if end_index not in feature.token_to_orig_map:
                         continue
                     if not feature.token_is_max_context.get(start_index, False):
                         continue
+                    '''
+                    # should not be the first token [CLS]
+                    if start_index == 0:
+                        continue
+                    if end_index == 0:
+                        continue
+                    # should not be the passage
+                    if end_index > feature.question_end_index:
+                        continue
                     if end_index < start_index:
                         continue
                     length = end_index - start_index + 1
                     if length > max_answer_length:
                         continue
-                    prelim_predictions.append(
+                    prelim_predictions_q.append(
                         _PrelimPrediction(
                             feature_index=feature_index,
                             start_index=start_index,
                             end_index=end_index,
-                            start_logit=result.start_logits[start_index],
-                            end_logit=result.end_logits[end_index]))
+                            start_logit=result.start_logits_q[start_index],
+                            end_logit=result.end_logits_q[end_index]))
         if version_2_with_negative:
             prelim_predictions.append(
                 _PrelimPrediction(
@@ -693,6 +730,10 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
                     end_logit=null_end_logit))
         prelim_predictions = sorted(
             prelim_predictions,
+            key=lambda x: (x.start_logit + x.end_logit),
+            reverse=True)
+        prelim_predictions_q = sorted(
+            prelim_predictions_q,
             key=lambda x: (x.start_logit + x.end_logit),
             reverse=True)
 
@@ -706,11 +747,14 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
                 break
             feature = features[pred.feature_index]
             if pred.start_index > 0:  # this is a non-null prediction
+                # get " " joined tokens
                 tok_tokens = feature.tokens[pred.start_index:(pred.end_index + 1)]
+                tok_text = " ".join(tok_tokens)
+
+                # get the original whitespace tokenized tokens
                 orig_doc_start = feature.token_to_orig_map[pred.start_index]
                 orig_doc_end = feature.token_to_orig_map[pred.end_index]
-                orig_tokens = example.doc_tokens[orig_doc_start:(orig_doc_end + 1)]
-                tok_text = " ".join(tok_tokens)
+                orig_tokens = example.paragraph_span_info.tokens[orig_doc_start:(orig_doc_end + 1)]
 
                 # De-tokenize WordPieces that have been split off.
                 tok_text = tok_text.replace(" ##", "")
@@ -755,8 +799,52 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
         if not nbest:
             nbest.append(
                 _NbestPrediction(text="empty", start_logit=0.0, end_logit=0.0))
-
         assert len(nbest) >= 1
+
+        seen_predictions_q = {}
+        nbest_q = []
+        for pred in prelim_predictions_q:
+            if len(nbest_q) >= n_best_size:
+                break
+            feature = features[pred.feature_index]
+            if pred.start_index > 0:  # this is a non-null prediction
+                # get " " joined tokens
+                tok_tokens = feature.tokens[pred.start_index:(pred.end_index + 1)]
+                tok_text = " ".join(tok_tokens)
+
+                # get the original whitespace tokenized tokens
+                orig_doc_start = feature.token_to_orig_map_q[pred.start_index]
+                orig_doc_end = feature.token_to_orig_map_q[pred.end_index]
+                orig_tokens = example.question_span_info.tokens[orig_doc_start:(orig_doc_end + 1)]
+
+                # De-tokenize WordPieces that have been split off.
+                tok_text = tok_text.replace(" ##", "")
+                tok_text = tok_text.replace("##", "")
+
+                # Clean whitespace
+                tok_text = tok_text.strip()
+                tok_text = " ".join(tok_text.split())
+                orig_text = " ".join(orig_tokens)
+
+                final_text = get_final_text(tok_text, orig_text, do_lower_case, verbose_logging)
+                if final_text in seen_predictions:
+                    continue
+
+                seen_predictions_q[final_text] = True
+            else:
+                final_text = ""
+                seen_predictions_q[final_text] = True
+
+            nbest_q.append(
+                _NbestPrediction(
+                    text=final_text,
+                    start_logit=pred.start_logit,
+                    end_logit=pred.end_logit))
+
+        if not nbest_q:
+            nbest_q.append(
+                _NbestPrediction(text="empty", start_logit=0.0, end_logit=0.0))
+        assert(len(nbest_q) > 0)
 
         total_scores = []
         best_non_null_entry = None
@@ -765,8 +853,18 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
             if not best_non_null_entry:
                 if entry.text:
                     best_non_null_entry = entry
+        total_scores_q = []
+        best_non_null_entry_q = None
+        for entry in nbest_q:
+            total_scores_q.append(entry.start_logit + entry.end_logit)
+            if not best_non_null_entry_q:
+                if entry.text:
+                    best_non_null_entry_q = entry
+                else:
+                    print("entry is empty")
 
         probs = _compute_softmax(total_scores)
+        probs_q = _compute_softmax(total_scores_q)
 
         nbest_json = []
         for (i, entry) in enumerate(nbest):
@@ -783,15 +881,22 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
             all_predictions[example.qas_id] = nbest_json[0]["text"]
         else:
             # predict "" iff the null score - the score of best non-null > threshold
-            score_diff = score_null - best_non_null_entry.start_logit - (
-                best_non_null_entry.end_logit)
+            p_score = best_non_null_entry.start_logit + best_non_null_entry.end_logit
+            q_score = best_non_null_entry_q.start_logit + best_non_null_entry_q.end_logit
+            score_diff = score_null - p_score
+            score_diff_q = score_null - q_score
             scores_diff_json[example.qas_id] = score_diff
-            if score_diff > null_score_diff_threshold:
+            scores_diff_json_q[example.qas_id] = score_diff_q
+            if score_diff > null_score_diff_threshold and score_diff_q > null_score_diff_threshold:
                 #all_predictions[example.qas_id] = ""                                                  ## outcomment
                 all_predictions[example.qas_id] = str(result.answer_as_counts)                         ## added
                 #print("in write predictions result.answer_as_counts: ", result.answer_as_counts)      ## added
             else:
-                all_predictions[example.qas_id] = best_non_null_entry.text
+                if q_score >= p_score:
+                    all_predictions[example.qas_id] = best_non_null_entry.text
+                else:
+                    all_predictions[example.qas_id] = best_non_null_entry_q.text
+
             all_nbest_json[example.qas_id] = nbest_json
 
     with open(output_prediction_file, "w") as writer:
