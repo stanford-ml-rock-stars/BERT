@@ -34,7 +34,7 @@ from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
 from pytorch_pretrained_bert.file_utils import PYTORCH_PRETRAINED_BERT_CACHE, WEIGHTS_NAME, CONFIG_NAME
-from pytorch_pretrained_bert.modeling_mt_drop_Kopie import BertForQuestionAnswering_count, BertConfig           ### changed module name
+from pytorch_pretrained_bert.modeling_drop_for_cs230 import BertForQuestionAnswering_count, BertConfig           ### changed module name
 from pytorch_pretrained_bert.optimization import BertAdam, WarmupLinearSchedule
 from pytorch_pretrained_bert.tokenization import (BasicTokenizer,
                                                   BertTokenizer,
