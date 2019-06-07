@@ -1,5 +1,6 @@
 import json
 from typing import List, Tuple
+from collections import defaultdict
 ## from reading_comprehension.data.drop_reader import DROPReader
 ## BA outcomment above and new line below:
 from drop_reader_for_cs230 import DROPReader                                    ## changed name
@@ -37,6 +38,7 @@ def convert(drop_data_path,
     print('skipped instances and total instances afterwards: ', skipped_instances, instance_count)  ## added print and counters above
 
     squad_style_data = []
+    span_type_map = defaultdict(int)
     for passage_id, instances in instances_grouped_by_passage.items():
         paragraph_text = instances[0].fields["metadata"].metadata["original_passage"]
         qas = []
@@ -52,9 +54,27 @@ def convert(drop_data_path,
                                                             metadata["original_passage"],
                                                             single_span=True)
 
+            if not question_converted_result[0]['is_impossible'] and not passage_converted_result[0]['is_impossible']:
+                if question_converted_result[0]["text"].lower().strip() != passage_converted_result[0]["text"].lower().strip() and len(metadata["answer_texts"]) == 1:
+                    print(question_converted_result[0]["text"])
+                    print(passage_converted_result[0]["text"])
+                    print(metadata["answer_texts"])
+                    print("---------------")
+            if question_converted_result[0]['is_impossible'] and passage_converted_result[0]['is_impossible']:
+                span_type = "not a span"
+            elif len(metadata["answer_texts"]) > 1:
+                span_type = "multi spans"
+            elif question_converted_result[0]['is_impossible']:
+                span_type = "passage_span_only"
+            elif passage_converted_result[0]['is_impossible']:
+                span_type = "question_span_only"
+            else:
+                span_type = "question_and_passage"
+            span_type_map[span_type] += 1
             qas.append({"id": metadata["question_id"],
                         "question": metadata["original_question"],
                         "answer_type": metadata["answer_type"],
+                        "span_type": span_type,
                         "answers_as_question_spans": question_converted_result,
                         "answers_as_passage_spans": passage_converted_result,
                         "answer_as_add_sub_expressions": [expression.labels for expression in instance.fields["answer_as_add_sub_expressions"]],
@@ -65,6 +85,8 @@ def convert(drop_data_path,
                                        "qas": qas}]}
         squad_style_data.append(new_passage)
     print(len(squad_style_data))                                                ## added print
+    print('------------------------------')
+    print(span_type_map)
     with open(squad_style_output_path, "w") as fout:
         squad_style_data = {"data": squad_style_data, "version": "drop-1.0"}
         json.dump(squad_style_data, fout)
@@ -78,6 +100,7 @@ def convert_span_answers(token_offsets: List[Tuple[int, int]],
     for spanfield in answer_spans:
 
         if spanfield.span_start == -1 and spanfield.span_end -1:
+            assert(len(answer_spans) == 1)
             answer_start = -1
             answer_text = ""
             is_impossible = True                                                ## added
@@ -96,13 +119,13 @@ def convert_span_answers(token_offsets: List[Tuple[int, int]],
     return answers
 
 def main():
-    convert("drop_dataset_train.json",                  ## ...
+    convert("../DATA/drop_dataset_train.json",                  ## ...
             "drop_train_for_cs230.json",                ## changed name
             skip_invalid=False,                         ## changed to False
             use_matched_span_as_answer_text=False)      ## changed to False
 
     ## BA outcomment (because already done):
-    convert("drop_dataset_dev.json",
+    convert("../DATA/drop_dataset_dev.json",
             "drop_dev_for_cs230.json",
             skip_invalid=False,
             use_matched_span_as_answer_text=False)

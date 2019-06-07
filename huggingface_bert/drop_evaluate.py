@@ -142,6 +142,71 @@ def to_string(answer):
         return tuple(
             ["{0} {1} {2}".format(answer["date"]["day"], answer["date"]["month"], answer["date"]["year"])]), "date"
 
+def _run_evaluation_span_type(annotations, predicted_answers, squad_answers):
+    """
+    Evaluation for programatic use.
+    """
+    exact_match = []
+    f1 = []
+    # for each type as well
+    type_to_em = {}
+    type_to_f1 = {}
+
+    # put squad answers into map
+    squad_qas_map = {}
+    for passage in squad_answers["data"]:
+        for para in passage["paragraphs"]:
+            for qa in para["qas"]:
+                squad_qas_map[qa["id"]] = qa
+
+    for pid, annotation in annotations.items():
+        for qa_pair in annotation["qa_pairs"]:
+            query_id = qa_pair["query_id"]
+            max_em_score = 0
+            max_f1_score = 0
+            max_type = None
+            if query_id in predicted_answers:
+                predicted = predicted_answers[query_id]
+            else:
+                print("Missing prediction for question: {}".format(query_id))
+                predicted = None
+            for answer in [qa_pair["answer"]] + qa_pair["validated_answers"]:
+                gold_answer, gold_type = to_string(answer)
+                em_score, f1_score = get_metrics(predicted, gold_answer)
+                if gold_answer[0].strip() != "":
+                    max_em_score = max(max_em_score, em_score)
+                    max_f1_score = max(max_f1_score, f1_score)
+                    if max_em_score == em_score or max_f1_score == f1_score: max_type = gold_type
+            span_type = squad_qas_map[query_id]["span_type"]
+            if max_type == "span":
+                max_type = span_type
+            elif max_type == "spans":
+                max_type = span_type
+                
+            exact_match.append(max_em_score)
+            f1.append(max_f1_score)
+            if max_type not in type_to_em:
+                type_to_em[max_type] = []
+            type_to_em[max_type].append(max_em_score)
+            if max_type not in type_to_f1:
+                type_to_f1[max_type] = []
+            type_to_f1[max_type].append(max_f1_score)
+            
+
+    global_em = np.mean(exact_match)
+    global_f1 = np.mean(f1)
+    print("Exact-match accuracy {0:.2f}".format(global_em * 100))
+    print("F1 score {0:.2f}".format(global_f1 * 100))
+    print("{0:.2f}   &   {1:.2f}".format(global_em * 100, global_f1 * 100))
+    print("----")
+    total = np.sum([len(v) for v in type_to_em.values()])
+    for typ in sorted(type_to_em.keys()):
+        print("{0}: {1} ({2:.2f}%)".format(typ, len(type_to_em[typ]), 100. * len(type_to_em[typ]) / total))
+        print("  Exact-match accuracy {0:.3f}".format(100. * np.mean(type_to_em[typ])))
+        print("  F1 score {0:.3f}".format(100. * np.mean(type_to_f1[typ])))
+    # return global_em, global_f1
+    return {"em": global_em, "f1": global_f1}
+
 
 def _run_evaluation(annotations, predicted_answers):
     """
@@ -194,9 +259,13 @@ def _run_evaluation(annotations, predicted_answers):
     return {"em": global_em, "f1": global_f1}
 
 
-def run_evaluation(prediction_path, gold_path):
+def run_evaluation(prediction_path, gold_path, squad_pred_path):
     predicted_answers = json.load(open(prediction_path, encoding='utf-8'))
     annotations = json.load(open(gold_path, encoding='utf-8'))
+    squad_answers = None
+    if squad_pred_path:
+        squad_answers = json.load(open(squad_pred_path, encoding='utf-8'))
+        return _run_evaluation_span_type(annotations, predicted_answers, squad_answers)
     return _run_evaluation(annotations, predicted_answers)
 
 
@@ -206,5 +275,6 @@ if __name__ == "__main__":
                         help='location of the gold file')
     parser.add_argument("--prediction_path", type=str, required=False, default="sample_predictions.json",
                         help='location of the prediction file')
+    parser.add_argument("--squad_pred_path", type=str, required=False, default="")
     args = parser.parse_args()
-    run_evaluation(args.prediction_path, args.gold_path)
+    run_evaluation(args.prediction_path, args.gold_path, args.squad_pred_path)
