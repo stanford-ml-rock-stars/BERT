@@ -1348,8 +1348,8 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
 
             loss_fct_1 = CrossEntropyLoss(ignore_index=ignored_index)
             loss_fct_2 = CrossEntropyLoss(ignore_index=10)                      ## Added loss function, ignore loss for class 10 which is all numbers != 0...9
-            weight_signs = torch.tensor([0.125, 1., 1.])                        ### Added to counter class imbalance (ad_subb-sign is 0 for 80%)
-            loss_fct_3 = CrossEntropyLoss(weight=weight_signs)                  ### Added loss function
+            #weight_signs = torch.tensor([0.125, 1., 1.])                       ### Added to counter class imbalance (ad_subb-sign is 0 for 80%) Useful??
+            loss_fct_3 = CrossEntropyLoss()                                     ### Added loss function
             #weight_type = torch.tensor([4., 1., 1.])                           ### Added to counter class imbalance (ca. 4 times more add_sub than count) True??
             loss_fct_4 = CrossEntropyLoss(ignore_index=2)                       ### Added loss function, ignore loss for dummy (q-span) class
             start_loss = loss_fct_1(start_logits, start_positions)
