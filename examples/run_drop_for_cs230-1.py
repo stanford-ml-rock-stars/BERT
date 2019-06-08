@@ -1023,8 +1023,8 @@ def main():
             input_file=args.train_file, is_training=True, version_2_with_negative=args.version_2_with_negative, add_sub_max_length=args.add_sub_max_length) ### added add_sub_max_length
 
         ## Here you could truncate the examples to have a toy set for debugging:
-        train_examples = train_examples[:1000]                                                                   ## Reduce number of train examples to ????
-        print('only 400 examples for training')                                                                 ## added
+        #train_examples = train_examples[:1000]                                                                   ## Reduce number of train examples to ????
+        #print('only 400 examples for training')                                                                 ## added
 
         cached_train_features_file = args.train_file+'_count_{0}_{1}_{2}_{3}'.format(                            ## Added _count in string
             list(filter(None, args.bert_model.split('/'))).pop(), str(args.max_seq_length), str(args.doc_stride), str(args.max_query_length))
@@ -1183,8 +1183,8 @@ def main():
             input_file=args.predict_file, is_training=False, version_2_with_negative=args.version_2_with_negative, add_sub_max_length=args.add_sub_max_length)  ### added add_sub_max_length
 
         ## Here you could truncate the dev set to have a toy set for debugging:
-        eval_examples = eval_examples[:150]                                                             ## Reduce number of dev examples to ????
-        print('only 80 examples for evaluation')
+        #eval_examples = eval_examples[:150]                                                             ## Reduce number of dev examples to ????
+        #print('only 80 examples for evaluation')
 
         eval_features = convert_examples_to_features(
             examples=eval_examples,
