@@ -6,6 +6,7 @@ import re
 import string
 
 import numpy as np
+from collections import defaultdict, Counter
 
 
 # Copied from: https://worksheets.codalab.org/rest/bundles/0x6b567e1cf2e041ec80d7098f031c5c9e/contents/blob/
@@ -142,6 +143,184 @@ def to_string(answer):
         return tuple(
             ["{0} {1} {2}".format(answer["date"]["day"], answer["date"]["month"], answer["date"]["year"])]), "date"
 
+def _run_evaluate_span_type_full(annotations, predicted_answers, squad_answers, pred_full):
+    """
+    Evaluation for programatic use.
+    """
+    exact_match = []
+    f1 = []
+    # for each type as well
+    type_to_em = {}
+    type_to_f1 = {}
+
+    selector_f1_map = defaultdict(Counter)
+    selector_em_map = defaultdict(Counter)
+    selector_f1_dist = defaultdict(lambda: defaultdict(list))
+    selector_em_dist = defaultdict(lambda: defaultdict(list))
+
+
+    exact_match_full = []
+    f1_full = []
+    # for each type as well
+    type_to_em_full = {}
+    type_to_f1_full = {}
+
+    # put squad answers into map
+    squad_qas_map = {}
+    for passage in squad_answers["data"]:
+        for para in passage["paragraphs"]:
+            for qa in para["qas"]:
+                squad_qas_map[qa["id"]] = qa
+
+    for pid, annotation in annotations.items():
+        for qa_pair in annotation["qa_pairs"]:
+            query_id = qa_pair["query_id"]
+            max_em_score = 0
+            max_f1_score = 0
+            max_type = None
+            max_em_score_full = 0
+            max_f1_score_full = 0
+            max_type_full = None
+            best_select = None
+            if query_id in predicted_answers:
+                predicted = predicted_answers[query_id]
+                assert(query_id in pred_full)
+                assert(pred_full[query_id][pred_full[query_id]["select"]]["answer"] == predicted)
+            else:
+                print("Missing prediction for question: {}".format(query_id))
+                predicted = None
+
+            for answer in [qa_pair["answer"]] + qa_pair["validated_answers"]:
+                gold_answer, gold_type = to_string(answer)
+                
+                pred_q = pred_full[query_id]["question"]
+                pred_p = pred_full[query_id]["passage"]
+                pred_c = pred_full[query_id]["count"]
+
+                em_score, f1_score = get_metrics(predicted, gold_answer)
+                if gold_answer[0].strip() != "":
+                    max_em_score = max(max_em_score, em_score)
+                    max_f1_score = max(max_f1_score, f1_score)
+                    if max_em_score == em_score or max_f1_score == f1_score: max_type = gold_type
+
+                em_score_q, f1_score_q = get_metrics(pred_q["answer"], gold_answer)
+                em_score_p, f1_score_p = get_metrics(pred_p["answer"], gold_answer)
+                em_score_c, f1_score_c = get_metrics(pred_c["answer"], gold_answer)
+                if gold_answer[0].strip() != "":
+                    max_em_full = max([em_score_q, em_score_p, em_score_c])
+                    max_em_score_full = max(max_em_score_full, max_em_full)
+                    max_f1_full = max([f1_score_q, f1_score_p, f1_score_c])
+                    max_f1_score_full = max(max_f1_score_full, max_f1_full)
+                    if max_em_score_full == max_em_full or max_f1_score_full == max_f1_full : 
+                        max_type_full = gold_type
+                        best_select = pred_full[query_id]["select"]
+
+                    def get_max_index(a, b, c):
+                        if a > b:
+                            if a > c:
+                                return 0
+                            else:
+                                return 2
+                        else:
+                            if b > c:
+                                return 1
+                            else:
+                                return 2
+                    def idx_to_cat(idx):
+                        if idx == 0:
+                            return "question"
+                        if idx == 1:
+                            return "passage"
+                        if idx == 2:
+                            return "count"
+                    max_em_idx_full = get_max_index(em_score_q, em_score_p, em_score_c)
+                    max_f1_idx_full = get_max_index(f1_score_q, f1_score_p, f1_score_c)
+                    if max_f1_full == max_f1_score_full:
+                        max_f1_cat = idx_to_cat(max_f1_idx_full)
+                    if max_em_full == max_em_score_full:
+                        max_em_cat = idx_to_cat(max_em_idx_full)
+            pred_cat = pred_full[query_id]["select"]
+
+            selector_f1_map[pred_cat][max_f1_cat] += 1
+            selector_em_map[pred_cat][max_em_cat] += 1
+            
+            pred_logits = pred_full[query_id][pred_cat]["logits"]
+            f1_max_logits = pred_full[query_id][max_f1_cat]["logits"]
+            em_max_logits = pred_full[query_id][max_em_cat]["logits"]
+            #assert(pred_logits >= f1_max_logits)
+            #assert(pred_logits >= em_max_logits)
+            assert(isinstance(pred_logits, float))
+            selector_f1_dist[pred_cat][max_f1_cat].append(float(pred_logits - f1_max_logits))
+            selector_em_dist[pred_cat][max_em_cat].append(float(pred_logits - em_max_logits))
+
+            span_type = squad_qas_map[query_id]["span_type"]
+            if max_type == "span":
+                max_type = span_type
+            elif max_type == "spans":
+                max_type = span_type
+
+            if max_type_full == "span":
+                max_type_full = span_type
+            elif max_type_full == "spans":
+                max_type_full = span_type
+                
+            exact_match.append(max_em_score)
+            f1.append(max_f1_score)
+            if max_type not in type_to_em:
+                type_to_em[max_type] = []
+            type_to_em[max_type].append(max_em_score)
+            if max_type not in type_to_f1:
+                type_to_f1[max_type] = []
+            type_to_f1[max_type].append(max_f1_score)
+            
+            exact_match_full.append(max_em_score_full)
+            f1_full.append(max_f1_score_full)
+            if max_type_full not in type_to_em_full:
+                type_to_em_full[max_type_full] = []
+            type_to_em_full[max_type_full].append(max_em_score_full)
+            if max_type_full not in type_to_f1_full:
+                type_to_f1_full[max_type_full] = []
+            type_to_f1_full[max_type_full].append(max_f1_score_full)
+
+
+    global_em = np.mean(exact_match)
+    global_f1 = np.mean(f1)
+    print("Exact-match accuracy {0:.2f}".format(global_em * 100))
+    print("F1 score {0:.2f}".format(global_f1 * 100))
+    print("{0:.2f}   &   {1:.2f}".format(global_em * 100, global_f1 * 100))
+    print("----")
+    total = np.sum([len(v) for v in type_to_em.values()])
+    for typ in sorted(type_to_em.keys()):
+        print("{0}: {1} ({2:.2f}%)".format(typ, len(type_to_em[typ]), 100. * len(type_to_em[typ]) / total))
+        print("  Exact-match accuracy {0:.3f}".format(100. * np.mean(type_to_em[typ])))
+        print("  F1 score {0:.3f}".format(100. * np.mean(type_to_f1[typ])))
+    global_em_full = np.mean(exact_match_full)
+    global_f1_full = np.mean(f1_full)
+    print("Exact-match accuracy {0:.2f}".format(global_em_full * 100))
+    print("F1 score {0:.2f}".format(global_f1_full * 100))
+    print("{0:.2f}   &   {1:.2f}".format(global_em_full * 100, global_f1_full * 100))
+    print("----")
+    total_full = np.sum([len(v) for v in type_to_em_full.values()])
+    for typ in sorted(type_to_em_full.keys()):
+        print("{0}: {1} ({2:.2f}%)".format(typ, len(type_to_em_full[typ]), 100. * len(type_to_em_full[typ]) / total_full))
+        print("  Exact-match accuracy {0:.3f}".format(100. * np.mean(type_to_em_full[typ])))
+        print("  F1 score {0:.3f}".format(100. * np.mean(type_to_f1_full[typ])))
+    # return global_em, global_f1
+    print(selector_f1_map)
+    print(selector_em_map)
+    for key, val in selector_f1_dist.items():
+        print(key, "::")
+        for k, v in val.items():
+            print(k, ":", sum(v)/float(len(v)))
+    
+    for key, val in selector_em_dist.items():
+        print(key, "::")
+        for k, v in val.items():
+            print(k, ":", sum(v)/float(len(v)))
+
+    return {"em": global_em, "f1": global_f1, "em_full": global_em_full, "f1": global_f1_full}
+
+
 def _run_evaluation_span_type(annotations, predicted_answers, squad_answers):
     """
     Evaluation for programatic use.
@@ -259,13 +438,17 @@ def _run_evaluation(annotations, predicted_answers):
     return {"em": global_em, "f1": global_f1}
 
 
-def run_evaluation(prediction_path, gold_path, squad_pred_path):
+def run_evaluation(prediction_path, gold_path, squad_pred_path, pred_full_path):
     predicted_answers = json.load(open(prediction_path, encoding='utf-8'))
     annotations = json.load(open(gold_path, encoding='utf-8'))
     squad_answers = None
     if squad_pred_path:
         squad_answers = json.load(open(squad_pred_path, encoding='utf-8'))
+        if pred_full_path:
+            pred_full = json.load(open(pred_full_path, encoding='utf-8'))
+            return _run_evaluate_span_type_full(annotations, predicted_answers, squad_answers, pred_full)
         return _run_evaluation_span_type(annotations, predicted_answers, squad_answers)
+
     return _run_evaluation(annotations, predicted_answers)
 
 
@@ -276,5 +459,6 @@ if __name__ == "__main__":
     parser.add_argument("--prediction_path", type=str, required=False, default="sample_predictions.json",
                         help='location of the prediction file')
     parser.add_argument("--squad_pred_path", type=str, required=False, default="")
+    parser.add_argument("--pred_full_path", type=str, required=False, default="")
     args = parser.parse_args()
-    run_evaluation(args.prediction_path, args.gold_path, args.squad_pred_path)
+    run_evaluation(args.prediction_path, args.gold_path, args.squad_pred_path, args.pred_full_path)
