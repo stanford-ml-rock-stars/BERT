@@ -4,6 +4,7 @@ from collections import defaultdict
 ## from reading_comprehension.data.drop_reader import DROPReader
 ## BA outcomment above and new line below:
 from drop_reader_for_cs230 import DROPReader                                    ## changed name
+from tqdm import tqdm
 
 ## BA insert:
 #drop_data_path_train='/Users/ba/Downloads/cs230/project/BERT/DATA/drop_dataset_train.json'
@@ -39,7 +40,7 @@ def convert(drop_data_path,
 
     squad_style_data = []
     span_type_map = defaultdict(int)
-    for passage_id, instances in instances_grouped_by_passage.items():
+    for passage_id, instances in tqdm(instances_grouped_by_passage.items()):
         paragraph_text = instances[0].fields["metadata"].metadata["original_passage"]
         qas = []
         for instance in instances:
@@ -54,12 +55,13 @@ def convert(drop_data_path,
                                                             metadata["original_passage"],
                                                             single_span=True)
 
-            if not question_converted_result[0]['is_impossible'] and not passage_converted_result[0]['is_impossible']:
-                if question_converted_result[0]["text"].lower().strip() != passage_converted_result[0]["text"].lower().strip() and len(metadata["answer_texts"]) == 1:
-                    print(question_converted_result[0]["text"])
-                    print(passage_converted_result[0]["text"])
-                    print(metadata["answer_texts"])
-                    print("---------------")
+            #if not question_converted_result[0]['is_impossible'] and not passage_converted_result[0]['is_impossible']:
+            #    if question_converted_result[0]["text"].lower().strip() != passage_converted_result[0]["text"].lower().strip() and len(metadata["answer_texts"]) == 1:
+                    #print(question_converted_result[0]["text"])
+                    #print(passage_converted_result[0]["text"])
+                    #print(metadata["answer_texts"])
+                    #print("---------------")
+            #        pass
             if question_converted_result[0]['is_impossible'] and passage_converted_result[0]['is_impossible']:
                 span_type = "not a span"
             elif len(metadata["answer_texts"]) > 1:
@@ -71,14 +73,33 @@ def convert(drop_data_path,
             else:
                 span_type = "question_and_passage"
             span_type_map[span_type] += 1
+            # print("---------------------")
+            #print(metadata["number_indices"])
+            #print([token.text for token in instance.fields["answer_as_add_sub_expressions"][0].sequence_field.tokens])
+            #print(instance.fields["number_indices"])
+            # print(len(instance.fields["number_indices"]), len(metadata["number_indices"]), len(instance.fields["answer_as_add_sub_expressions"][0].sequence_field))
+            # print(instance.fields["answer_as_add_sub_expressions"])
+
+            # padding for add sub task
+            max_n = 140
+            max_c  = 500
+            number_indices = (metadata["number_indices"] + [-1]*max_n)[:max_n]
+            answer_as_add_sub_expressions = [(expression.labels + [0]*max_n)[:max_n] for expression in instance.fields["answer_as_add_sub_expressions"]]
+            answer_as_add_sub_expressions = (answer_as_add_sub_expressions + [[0]*max_n] * max_c)[:max_c]
+
+            number_indices = metadata["number_indices"]
+            answer_as_add_sub_expressions = [expression.labels for expression in instance.fields["answer_as_add_sub_expressions"]]
+
             qas.append({"id": metadata["question_id"],
                         "question": metadata["original_question"],
                         "answer_type": metadata["answer_type"],
                         "span_type": span_type,
+                        "answers": metadata["answer_texts"],
                         "answers_as_question_spans": question_converted_result,
                         "answers_as_passage_spans": passage_converted_result,
-                        "answer_as_add_sub_expressions": [expression.labels for expression in instance.fields["answer_as_add_sub_expressions"]],
+                        "answer_as_add_sub_expressions": answer_as_add_sub_expressions,
                         "answer_as_add_sub_numbers": [token.text for token in instance.fields["answer_as_add_sub_expressions"][0].sequence_field.tokens],
+                        "number_indices": number_indices,
                         "answer_as_counts":[labelfield.label for labelfield in instance.fields["answer_as_counts"]]})                                       ## added
         new_passage = {"title": passage_id,
                        "paragraphs": [{"context": paragraph_text,
@@ -120,13 +141,13 @@ def convert_span_answers(token_offsets: List[Tuple[int, int]],
 
 def main():
     convert("../DATA/drop_dataset_train.json",                  ## ...
-            "drop_train_for_cs230.json",                ## changed name
+            "drop_train_add_sub.json",                ## changed name
             skip_invalid=False,                         ## changed to False
             use_matched_span_as_answer_text=False)      ## changed to False
 
     ## BA outcomment (because already done):
     convert("../DATA/drop_dataset_dev.json",
-            "drop_dev_for_cs230.json",
+            "drop_dev_add_sub.json",
             skip_invalid=False,
             use_matched_span_as_answer_text=False)
 

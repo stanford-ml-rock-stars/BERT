@@ -25,6 +25,7 @@ import math
 import os
 import random
 import sys
+import itertools
 from io import open
 
 from typing import List
@@ -41,6 +42,7 @@ from pytorch_pretrained_bert.optimization import BertAdam, WarmupLinearSchedule
 from pytorch_pretrained_bert.tokenization import (BasicTokenizer,
                                                   BertTokenizer,
                                                   whitespace_tokenize)
+from word2number.w2n import word_to_num
 
 if sys.version_info[0] == 2:
     import cPickle as pickle
@@ -67,17 +69,28 @@ class SquadExample(object):
     def __init__(self,
                  qas_id,
                  question_text,
+                 answer_texts,
+                 answer_type,
                  question_span_info: SpanInfo,
                  paragraph_span_info: SpanInfo,
+                 answer_as_add_sub_expressions=None,
+                 answer_as_add_sub_numbers=None,
+                 number_indices=None,
                  is_impossible=None,
                  answer_as_counts=None):                                        ## added
         self.qas_id = qas_id
+        self.answer_type = answer_type
         self.question_text = question_text
         self.is_impossible = is_impossible
         self.answer_as_counts = answer_as_counts                                ## added
 
         self.question_span_info = question_span_info
         self.paragraph_span_info = paragraph_span_info
+
+        self.answer_as_add_sub_expressions = answer_as_add_sub_expressions
+        self.answer_as_add_sub_numbers = answer_as_add_sub_numbers
+        self.number_indices = number_indices
+        self.answer_texts = answer_texts
 
     def __str__(self):
         return self.__repr__()
@@ -124,6 +137,9 @@ class InputFeatures(object):
                  start_position_q=None,
                  end_position_q=None,
                  is_impossible=None,
+                 answer_as_add_sub_expressions=None,
+                 answer_as_add_sub_numbers=None,
+                 number_indices=None,
                  answer_as_counts=None):                                         ## added
         self.unique_id = unique_id
         self.example_index = example_index
@@ -141,6 +157,9 @@ class InputFeatures(object):
         self.start_position_q = start_position_q
         self.end_position_q = end_position_q
         self.is_impossible = is_impossible
+        self.answer_as_add_sub_expressions = answer_as_add_sub_expressions
+        self.answer_as_add_sub_numbers = answer_as_add_sub_numbers
+        self.number_indices = number_indices
         self.answer_as_counts = answer_as_counts                                ## added answer_as_counts
 
 
@@ -170,6 +189,7 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
             char_to_word_offset.append(len(tokens) - 1)
         return tokens, char_to_word_offset
 
+    d_count = 0
     examples = []
     unmatched_answers_counter = 0                                                                 ## added
     unmatched_question_span_answers = 0
@@ -198,11 +218,15 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
                 qas_id = qa["id"]
                 question_text = qa["question"]
                 answer_as_counts = qa["answer_as_counts"][0]                    ## added
+                answer_as_add_sub_expressions = qa["answer_as_add_sub_expressions"]
+                answer_as_add_sub_numbers = qa["answer_as_add_sub_numbers"]
+                number_indices = qa["number_indices"]
                 answers_as_paragraph_spans = qa["answers_as_passage_spans"]
                 answers_as_question_spans = qa["answers_as_question_spans"]
+                answer_texts = None
 
-                if answer_as_counts < 0 or answer_as_counts > 10:               ## added
-                    answer_as_counts = 10                                       ## added
+                #if answer_as_counts < 0 or answer_as_counts > 10:               ## added
+                #    answer_as_counts = 10                                       ## added
 
                 question_span_info = SpanInfo()
                 question_span_info.tokens, question_span_info.char_to_word_offset = get_whitespace_tokens(question_text)
@@ -214,6 +238,7 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
                 is_impossible = False
 
                 if is_training:
+
                     def parse_spans_info(answers_as_spans, span_info: SpanInfo, with_negative):
                         is_impossible = False
                         if with_negative:
@@ -240,6 +265,10 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
                             cleaned_answer_text = " ".join(whitespace_tokenize(orig_answer_text))
 
                             answer_matches = actual_text.find(cleaned_answer_text) != -1
+                            #if not answer_matches:
+                                #print("not matched")
+                                #print(actual_text)
+                                #print(cleaned_answer_text)
                         else:
                             start_word_position = -1
                             end_word_position = -1
@@ -260,11 +289,23 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
                         continue
                     if not question_answer_matches:
                         unmatched_question_span_answers += 1
+                        continue
 
                     is_impossible = question_span_info.is_impossible and paragraph_span_info.is_impossible
 
+                    answer_texts = qa["answers"]
+                    #if not question_span_info.is_impossible and not paragraph_span_info.is_impossible:
+                    #    if question_span_info.orig_answer_text.lower() != paragraph_span_info.orig_answer_text.lower():
+                    #        print("==========================")
+                    #        print(qas_id)
+                    #        print(question_span_info.orig_answer_text)
+                    #        print(paragraph_span_info.orig_answer_text)
+                    #        d_count += 1
+
                 example = SquadExample(
                     qas_id=qas_id,
+                    answer_texts=answer_texts,
+                    answer_type=qa["answer_type"],
                     question_text=question_text,
                     is_impossible=is_impossible,
                     ####################3
@@ -275,12 +316,17 @@ def read_squad_examples(input_file, is_training, version_2_with_negative):
                     ####################3
                     question_span_info=question_span_info,
                     paragraph_span_info=paragraph_span_info,
+                    answer_as_add_sub_expressions=answer_as_add_sub_expressions,
+                    answer_as_add_sub_numbers=answer_as_add_sub_numbers,
+                    number_indices=number_indices,
                     answer_as_counts=answer_as_counts)                          ## added
 
                 examples.append(example)
     print("skipped examples because matching answer could not be found:  ", unmatched_answers_counter)     ## added
     print("skipped examples because matching question span answer could not be found:  ", unmatched_question_span_answers)     ## added
     #print("print some examples...", examples[:10])                                      ## added print
+    print('--------------------------------------------')
+    print("d count: ", d_count)
     return examples
 
 
@@ -295,7 +341,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
 
     question_exceed_max_count = 0
     question_span_answer_truncated = 0
-    for (example_index, example) in enumerate(examples):
+    for (example_index, example) in enumerate(tqdm(examples, desc="examples")):
         query_tokens = tokenizer.tokenize(example.question_text)
 
         if len(query_tokens) > max_query_length:
@@ -364,6 +410,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
 
         doc_spans = []
         start_offset = 0
+        # create doc spans
         while start_offset < len(all_doc_tokens_p):
             length = len(all_doc_tokens_p) - start_offset
             if length > max_tokens_for_doc:
@@ -380,19 +427,26 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
             token_to_orig_map = {}
             token_to_orig_map_q = {}
             token_is_max_context = {}
+            # index of tokens
+            number_indices = []
+            numbers_in_passage = []
+            
             # segment type of each token, 0 is question, 1 is passage
             segment_ids = []
+            # ---------- start -------------
             tokens.append("[CLS]")
             segment_ids.append(0)
+            # ---------- question -------------
             for i, token in enumerate(query_tokens):
                 assert(token == all_doc_tokens_q[i])
                 assert(len(tokens) == i + 1)
                 token_to_orig_map_q[len(tokens)] = tok_to_orig_index_q[i]
                 tokens.append(token)
                 segment_ids.append(0)
+            # ---------- sep -------------
             tokens.append("[SEP]")
             segment_ids.append(0)
-
+            # ---------- passage -------------
             for i in range(doc_span.length):
                 split_token_index = doc_span.start + i
                 token_to_orig_map[len(tokens)] = tok_to_orig_index_p[split_token_index]
@@ -401,8 +455,17 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
                 is_max_context = _check_is_max_context(doc_spans, doc_span_index,
                                                        split_token_index)
                 token_is_max_context[len(tokens)] = is_max_context
+                tokk = all_doc_tokens_p[split_token_index]
+
+                assert(isinstance(tokk, str))
+                number = convert_word_to_number(tokk)
+                if number is not None:
+                    numbers_in_passage.append(number)
+                    number_indices.append(len(tokens))
+
                 tokens.append(all_doc_tokens_p[split_token_index])
                 segment_ids.append(1)
+            # ---------- end -------------
             tokens.append("[SEP]")
             segment_ids.append(1)
 
@@ -422,6 +485,27 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
             assert len(input_ids) == max_seq_length
             assert len(input_mask) == max_seq_length
             assert len(segment_ids) == max_seq_length
+
+            # add sub training data
+            numbers_in_answers = []
+            add_sub_expressions = []
+            if is_training and example.answer_type in ["numbers", "date"]:
+                print("getting expressions")
+                for ans in example.answer_texts:
+                    number = convert_word_to_number(ans)
+                    if number is not None:
+                        numbers_in_answers.append(number)
+                print(example.answer_texts)
+                print(numbers_in_answers)
+                print(numbers_in_passage)
+                if example.qas_id == '4600e413-5dc2-480f-a561-631214c52782':
+                    print(tokens)
+                print("question_id:", example.qas_id) 
+                print("start_index:", doc_span.start)
+                print("length of numbers in answer:", len(numbers_in_answers))
+                add_sub_expressions = find_valid_add_sub_expressions(numbers_in_passage, numbers_in_answers)
+                print("length of add_sub_expressions:", len(add_sub_expressions))
+                print("length of example_add_sub_expressions:", len(example.answer_as_add_sub_expressions))
 
             # the start and end positions in each DocSpan
             start_position = None
@@ -448,7 +532,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
                 start_position = 0
                 end_position = 0
             # Logging
-            if example_index < 3:                                               ## 3 changed from 20
+            if example_index < 0:                                               ## 3 changed from 20
                 logger.info("*** Example ***")
                 logger.info("unique_id: %s" % (unique_id))
                 logger.info("example_index: %s" % (example_index))
@@ -502,6 +586,9 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
                     end_position=end_position,
                     start_position_q=start_position_q,
                     end_position_q=end_position_q,
+                    answer_as_add_sub_expressions=add_sub_expressions,
+                    answer_as_add_sub_numbers=numbers_in_passage,
+                    number_indices=number_indices,
                     is_impossible=example.is_impossible,
                     answer_as_counts=example.answer_as_counts))                 ## added
             unique_id += 1
@@ -510,9 +597,69 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
     print("there are ", question_span_answer_truncated, "questions span got truncated")
     return features
 
+def find_valid_add_sub_expressions(numbers: List[int],
+                                   targets: List[int],
+                                   max_number_of_numbers_to_consider: int = 2) -> List[List[int]]:
+    valid_signs_for_add_sub_expressions = []
+    # TODO: Try smaller numbers?
+    for number_of_numbers_to_consider in range(2, max_number_of_numbers_to_consider + 1):
+        possible_signs = list(itertools.product((-1, 1), repeat=number_of_numbers_to_consider))
+        for number_combination in itertools.combinations(enumerate(numbers), number_of_numbers_to_consider):
+            indices = [it[0] for it in number_combination]
+            values = [it[1] for it in number_combination]
+            for signs in possible_signs:
+                eval_value = sum(sign * value for sign, value in zip(signs, values))
+                if eval_value in targets:
+                    labels_for_numbers = [0] * len(numbers)  # 0 represents ``not included''.
+                    for index, sign in zip(indices, signs):
+                        labels_for_numbers[index] = 1 if sign == 1 else 2  # 1 for positive, 2 for negative
+                    valid_signs_for_add_sub_expressions.append(labels_for_numbers)
+    return valid_signs_for_add_sub_expressions
+
+WORD_NUMBER_MAP = {"zero": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+                   "five": 5, "six": 6, "seven": 7, "eight": 8,
+                   "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+                   "thirteen": 13, "fourteen": 14, "fifteen": 15,
+                   "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19}
+
+
+def convert_word_to_number(word: str, try_to_include_more_numbers=False):
+    """
+    Currently we only support limited types of conversion.
+    """
+    if try_to_include_more_numbers:
+        # strip all punctuations from the sides of the word, except for the negative sign
+        punctruations = string.punctuation.replace('-', '')
+        word = word.strip(punctruations)
+        # some words may contain the comma as deliminator
+        word = word.replace(",", "")
+        # word2num will convert hundred, thousand ... to number, but we skip it.
+        if word in ["hundred", "thousand", "million", "billion", "trillion"]:
+            return None
+        try:
+            number = word_to_num(word)
+        except ValueError:
+            try:
+                number = int(word)
+            except ValueError:
+                try:
+                    number = float(word)
+                except ValueError:
+                    number = None
+        return number
+    else:
+        no_comma_word = word.replace(",", "")
+        if no_comma_word in WORD_NUMBER_MAP:
+            number = WORD_NUMBER_MAP[no_comma_word]
+        else:
+            try:
+                number = int(no_comma_word)
+            except ValueError:
+                number = None
+        return number
 
 def _improve_answer_span(doc_tokens, input_start, input_end, tokenizer,
-                         orig_answer_text):
+        orig_answer_text):
     """Returns tokenized answer spans that better match the annotated answer."""
 
     # The SQuAD annotations are character based. We first project them to
@@ -611,6 +758,7 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
         ["feature_index", "start_index", "end_index", "start_logit", "end_logit"])
 
     all_predictions = collections.OrderedDict()
+    all_predictions_full = collections.OrderedDict()
     all_nbest_json = collections.OrderedDict()
     scores_diff_json = collections.OrderedDict()
     scores_diff_json_q = collections.OrderedDict()
@@ -640,9 +788,9 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
             start_indexes_q = _get_best_indexes(result.start_logits_q, n_best_size)
             end_indexes_q = _get_best_indexes(result.end_logits_q, n_best_size)
             assert(len(start_indexes_q) > 0)
-            print("len of start_logits_q", len(result.start_logits_q))
-            print("len of start_logits", len(result.start_logits))
-            print("len of feature.tokens", len(feature.tokens))
+            # print("len of start_logits_q", len(result.start_logits_q))
+            # print("len of start_logits", len(result.start_logits))
+            # print("len of feature.tokens", len(feature.tokens))
             # if we could have irrelevant answers, get the min score of irrelevant
             if version_2_with_negative:
                 # get the combined score for the [CLS] token, which means there is no answer 
@@ -880,6 +1028,7 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
         if not version_2_with_negative:
             all_predictions[example.qas_id] = nbest_json[0]["text"]
         else:
+            pred_full = {}
             # predict "" iff the null score - the score of best non-null > threshold
             p_score = best_non_null_entry.start_logit + best_non_null_entry.end_logit
             q_score = best_non_null_entry_q.start_logit + best_non_null_entry_q.end_logit
@@ -887,20 +1036,32 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
             score_diff_q = score_null - q_score
             scores_diff_json[example.qas_id] = score_diff
             scores_diff_json_q[example.qas_id] = score_diff_q
+            assert(isinstance(score_diff, float))
+
+            pred_full["question"] = {"answer": best_non_null_entry_q.text, "logits": q_score}
+            pred_full["passage"] = {"answer": best_non_null_entry.text, "logits": p_score}
+            pred_full["count"] = {"answer": str(result.answer_as_counts), "logits": score_null}
             if score_diff > null_score_diff_threshold and score_diff_q > null_score_diff_threshold:
                 #all_predictions[example.qas_id] = ""                                                  ## outcomment
                 all_predictions[example.qas_id] = str(result.answer_as_counts)                         ## added
                 #print("in write predictions result.answer_as_counts: ", result.answer_as_counts)      ## added
+                pred_full["select"] = "count"
             else:
-                if q_score >= p_score:
-                    all_predictions[example.qas_id] = best_non_null_entry.text
-                else:
+                if q_score - p_score > 8:
                     all_predictions[example.qas_id] = best_non_null_entry_q.text
+                    pred_full["select"] = "question"
+                else:
+                    all_predictions[example.qas_id] = best_non_null_entry.text
+                    pred_full["select"] = "passage"
 
             all_nbest_json[example.qas_id] = nbest_json
+            all_predictions_full[example.qas_id] = pred_full
 
     with open(output_prediction_file, "w") as writer:
         writer.write(json.dumps(all_predictions, indent=4) + "\n")
+
+    with open(output_prediction_file+".full", "w") as writer:
+        writer.write(json.dumps(all_predictions_full, indent=4) + "\n")
 
     with open(output_nbest_file, "w") as writer:
         writer.write(json.dumps(all_nbest_json, indent=4) + "\n")
@@ -1213,7 +1374,7 @@ def main():
         cached_train_features_file = args.train_file+'_count_{0}_{1}_{2}_{3}'.format(                            ## Added _count in string
             list(filter(None, args.bert_model.split('/'))).pop(), str(args.max_seq_length), str(args.doc_stride), str(args.max_query_length))
         try:
-            with open(cached_train_features_file, "rb") as reader:
+            with open(cached_train_features_file+"no_way", "rb") as reader:
                 train_features = pickle.load(reader)
         except:
             train_features = convert_examples_to_features(
@@ -1228,7 +1389,13 @@ def main():
                 with open(cached_train_features_file, "wb") as writer:
                     pickle.dump(train_features, writer)
 
+        # a map from id to feature, used in the training for the add sub task
+        id_to_feature = {}
+        for f in train_features:
+            id_to_feature[f.unique_id] = f
+
         # turn input into tensors
+        all_feature_ids = torch.tensor([f.unique_id for f in train_features], dtype=torch.long)
         all_input_ids = torch.tensor([f.input_ids for f in train_features], dtype=torch.long)
         all_input_mask = torch.tensor([f.input_mask for f in train_features], dtype=torch.long)
         all_segment_ids = torch.tensor([f.segment_ids for f in train_features], dtype=torch.long)
@@ -1237,8 +1404,14 @@ def main():
         all_start_positions_q = torch.tensor([f.start_position_q for f in train_features], dtype=torch.long)
         all_end_positions_q = torch.tensor([f.end_position_q for f in train_features], dtype=torch.long)
         all_answers_as_counts = torch.tensor([f.answer_as_counts for f in train_features], dtype=torch.long)     ## added answers_as_counts tensor long
-        train_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids,
-                                   all_start_positions, all_end_positions, all_start_positions_q, all_end_positions_q, all_answers_as_counts)                ## added all_answers_as_counts
+        #all_answers_as_add_sub_expresions = torch.tensor([f.answer_as_add_sub_expressions for f in train_features], dtype=torch.long)
+        #all_nuber_indices = torch.tensor([f.number_indices for f in train_features], dtype=torch.long)
+        train_data = TensorDataset(all_feature_ids, all_input_ids, all_input_mask, all_segment_ids,
+                                   all_start_positions, all_end_positions, 
+                                   all_start_positions_q, all_end_positions_q, 
+                                   all_answers_as_counts)
+                                   #all_answers_as_add_sub_expressions, all_answers_as_add_sub_numbers,
+                                   #all_number_indices)                ## added all_answers_as_counts
 
         #print("saving feature_check...")                                                                        ## added print
         #feature_check = np.column_stack((all_start_positions, all_end_positions, all_answers_as_counts))        ## Added
@@ -1307,8 +1480,37 @@ def main():
             for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])):
                 if n_gpu == 1:
                     batch = tuple(t.to(device) for t in batch) # multi-gpu does scattering it-self
-                input_ids, input_mask, segment_ids, start_positions, end_positions, start_position_q, end_position_q, answers_as_counts = batch          ## added answers_as_counts
-                loss = model(input_ids, segment_ids, input_mask, start_positions, end_positions, start_position_q, end_position_q, answers_as_counts)    ## added answers_as_counts
+                feature_ids, input_ids, input_mask, segment_ids, start_positions,\
+                        end_positions, start_position_q, end_position_q, answers_as_counts = batch          ## added answers_as_counts
+
+                # --------- add sub --------------
+                batch_features = [id_to_feature[i.item()] for i in feature_ids]
+                max_num_combos = 0
+                max_num_num_indices = 0
+                for f in batch_features:
+                    max_num_combos = max(max_num_combos, len(f.answer_as_add_sub_expressions))
+                    max_num_num_indices = max(max_num_num_indices, len(f.number_indices))
+                
+                answer_as_add_sub_expressions = []
+                number_indices = []
+
+                print("max_combo:", max_num_combos)
+                print("max_num:", max_num_num_indices)
+                for f in batch_features:
+                    expression = [a + [0]*(max_num_num_indices-len(a)) for a in f.answer_as_add_sub_expressions] 
+                    expression = expression + [[0] * max_num_num_indices] * (max_num_combos - len(expression))
+                    answer_as_add_sub_expressions.append(torch.tensor(expression, dtype=torch.long))
+                    indices = f.number_indices + [-1]*(max_num_num_indices - len(f.number_indices))
+                    number_indices.append(torch.tensor(indices, dtype=torch.long))
+                print(batch_features[0].tokens)
+                        
+                answer_as_add_sub_expressions = torch.stack(answer_as_add_sub_expressions, dim=0).to(device)
+                number_indices = torch.stack(number_indices, dim=0).to(device)
+
+                print(answer_as_add_sub_expressions.shape)
+                print(number_indices.shape)
+                loss = model(input_ids, segment_ids, input_mask, start_positions, end_positions, 
+                        start_position_q, end_position_q, answers_as_counts, number_indices, answer_as_add_sub_expressions)    ## added answers_as_counts
 
                 #losses.append(loss.item())                                                             ## Added
                 #classification_losses.append(classification_loss.item())                               ## Added
@@ -1357,7 +1559,12 @@ def main():
         model = BertForQuestionAnswering_count.from_pretrained(args.output_dir, args.max_seq_length)    ## Changed name & Added max_seq_length
         tokenizer = BertTokenizer.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
     else:
-        model = BertForQuestionAnswering_count.from_pretrained(args.bert_model, args.max_seq_length)    ## Changed name & Added max_seq_length
+        if args.do_predict:
+        # model = BertForQuestionAnswering_count.from_pretrained(args.bert_model, args.max_seq_length)    ## Changed name & Added max_seq_length
+            model = BertForQuestionAnswering_count.from_pretrained(args.output_dir, args.max_seq_length)    ## Changed name & Added max_seq_length
+            tokenizer = BertTokenizer.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
+    # model = BertForQuestionAnswering_count.from_pretrained(args.output_dir, args.max_seq_length)    ## Changed name & Added max_seq_length
+    # tokenizer = BertTokenizer.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
 
     model.to(device)
 

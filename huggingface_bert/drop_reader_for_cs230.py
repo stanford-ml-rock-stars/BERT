@@ -17,6 +17,7 @@ from allennlp.data.fields import Field, TextField, MetadataField, LabelField, Li
 from word2number.w2n import word_to_num
 ## from reading_comprehension.utils import split_tokens_by_hyphen               ## outcomment
 from utils_for_bert import split_tokens_by_hyphen                               ## changed name
+from tqdm import tqdm, trange
 
 ## BA insert:
 #file_path='/Users/ba/Downloads/cs230/project/BERT/DATA/drop_dataset_train.json'
@@ -77,11 +78,14 @@ class DROPReader(DatasetReader):
             as correct, and every token in the date answer as correct, too. Note that this will not
             affect evaluation.
         """
+        ''' ().() ^******^^ _^8^_ '''
         super().__init__(lazy)
         self._tokenizer = tokenizer or WordTokenizer()
         self._token_indexers = token_indexers or {"tokens": SingleIdTokenIndexer()}
         self.passage_length_limit = passage_length_limit
         self.question_length_limit = question_length_limit
+        self.max_num_of_num = 0
+        self.max_num_of_comb = 0
 
         self.skip_when_all_empty = skip_when_all_empty if skip_when_all_empty is not None else []
         for item in self.skip_when_all_empty:
@@ -100,11 +104,12 @@ class DROPReader(DatasetReader):
             dataset = json.load(dataset_file)
         logger.info("Reading the dataset")
         instances, skip_count = [], 0
-        for passage_id, passage_info in dataset.items():
+        
+        for passage_id, passage_info in tqdm(dataset.items()):
             passage_text = passage_info["passage"]
             passage_tokens = self._tokenizer.tokenize(passage_text)
             passage_tokens = split_tokens_by_hyphen(passage_tokens)
-            for question_answer in passage_info["qa_pairs"]:
+            for question_answer in tqdm(passage_info["qa_pairs"]):
                 question_id = question_answer["query_id"]
                 question_text = question_answer["question"].strip()
                 answer_annotations = []
@@ -125,11 +130,13 @@ class DROPReader(DatasetReader):
                     skip_count += 1
             # ---------------------------- FOR TEST ----------------------------------------
             # early stop
-            #if len(instance) > 500:
-                #break
+            if len(instances) > 500:
+               break
             # ---------------------------- FOR TEST ----------------------------------------
         # pylint: disable=logging-fstring-interpolation
         logger.info(f"Skipped {skip_count} questions, kept {len(instances)} questions.")
+        print("max # of numbers in the passage:", self.max_num_of_num)
+        print("max # of combinations:", self.max_num_of_comb)
         return instances
 
     @overrides
@@ -229,6 +236,7 @@ class DROPReader(DatasetReader):
             # hack to guarantee minimal length of padded number
             numbers_in_passage.append(0)
             number_indices.append(-1)
+            self.max_num_of_num = max(self.max_num_of_num, len(number_indices))
             numbers_as_tokens = [Token(str(number)) for number in numbers_in_passage]
 
             valid_passage_spans = \
@@ -251,6 +259,7 @@ class DROPReader(DatasetReader):
                 # Currently we only support count number 0 ~ 9
                 numbers_for_count = list(range(10))
                 valid_counts = self.find_valid_counts(numbers_for_count, target_numbers)
+            self.max_num_of_comb = max(self.max_num_of_comb, len(valid_signs_for_add_sub_expressions))
 
             type_to_answer_map = {"passage_span": valid_passage_spans,
                                   "question_span": valid_question_spans,

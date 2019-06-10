@@ -34,6 +34,9 @@ from torch.nn import CrossEntropyLoss
 from torch.nn import BCEWithLogitsLoss                      ## Added for classification loss
 import torch.nn.functional as F                             ## Added for use of sigmoid in classification
 
+#from pytorch_pretrained_bert.utils import logsumexp, replace_masked_values
+import pytorch_pretrained_bert.utils as utils
+
 from pytorch_pretrained_bert.file_utils import cached_path, WEIGHTS_NAME, CONFIG_NAME
 
 logger = logging.getLogger(__name__)
@@ -1244,27 +1247,44 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
         # self.dropout = nn.Dropout(config.hidden_dropout_prob)
         # 4 outputs for spans in question and paragraph
         # (start_q, end_q), (start_p, end_p)
-        self.qa_outputs = nn.Linear(config.hidden_size, 4)
+        self.qa_outputs = nn.Linear(config.hidden_size, 2)
+        self.qa_outputs_q = nn.Linear(config.hidden_size, 2)
         self.apply(self.init_bert_weights)
 
         self.classification_1 = nn.Linear(config.hidden_size*self.max_seq_length, 64)   ## Added linear layer for digit classification
         self.relu = nn.ReLU()                                                           ## Added Relu for digit classification
-        self.classification_2 = nn.Linear(64, 11)                                       ## Added second linear layer with N+1 classes
+        self.classification_2 = nn.Linear(64, 10)                                       ## Added second linear layer with N classes
         #self.numbers_weights = torch.tensor([0.5,2,2,2,2,2,2,2,2,0.5])                 ## weights for number CrossEntropy
+        self.number_sign_nn_1 = nn.Linear(config.hidden_size * 2, config.hidden_size)
+        self.number_sign_nn_2 = nn.Linear(config.hidden_size, 3)  # 0:no sign, 1:+, 2:-
 
-    def forward(self, input_ids, token_type_ids=None, attention_mask=None, start_positions=None, end_positions=None, start_positions_q=None, end_positions_q=None, answers_as_counts=None):     ## added answers_as_counts
+    def forward(self, input_ids, 
+            token_type_ids=None, 
+            attention_mask=None, 
+            start_positions=None, 
+            end_positions=None, 
+            start_positions_q=None, 
+            end_positions_q=None, 
+            answers_as_counts=None,
+            number_indices=None,
+            answer_as_add_sub_expressions=None):     ## added answers_as_counts
         # [batch_size, sequence_length, hidden_size]
         sequence_output, _ = self.bert(input_ids, token_type_ids, attention_mask, output_all_encoded_layers=False)
+
+        # ---------------------------------------- SPAN --------------------------------------------
         # [batch_size, sequence_length, 4]
         logits = self.qa_outputs(sequence_output)
+        logits_q = self.qa_outputs_q(sequence_output)
         # [batch_size, sequence_length, 1]
-        start_logits_q, end_logits_q, start_logits_p, end_logits_p = logits.split(1, dim=-1)
+        start_logits_p, end_logits_p = logits.split(1, dim=-1)
+        start_logits_q, end_logits_q = logits_q.split(1, dim=-1)
         # [batch_size, sequence_length]
         start_logits_q = start_logits_q.squeeze(-1)
         end_logits_q = end_logits_q.squeeze(-1)
         start_logits_p = start_logits_p.squeeze(-1)
         end_logits_p = end_logits_p.squeeze(-1)
 
+        # ---------------------------------------- COUNT --------------------------------------------
         classification_input = sequence_output.view(sequence_output.size()[0], -1)    ## Reshape into (batch, hidden_size x max_seq_length)
         class_logits = self.classification_1(classification_input)                    ## Added for classification
         class_logits = self.relu(class_logits)                                        ## Added for classification
@@ -1281,6 +1301,37 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
         #print('raw start_positions:... ', start_positions)                     ## Added print
         #print('raw answers_as_counts: ', answers_as_counts)                    ## Added print
 
+        # ---------------------------------------- ADD SUB --------------------------------------------
+        # [batch_size, # of numbers in the passage]
+        number_indices = number_indices.squeeze(-1)
+        # [batch_size, # of numbers in the passage]
+        number_mask = (number_indices != -1).long()
+	# change -1 in number_indices to 0
+        # [batch_size, # of numbers in the passage]
+        masked_number_indices = utils.replace_masked_values(number_indices, number_mask, 0)
+	# select the BERT output for only the number positions
+       	# [batch_size, # of numbers in the passage, encoding_dim]
+        print(masked_number_indices.shape)
+        tt = masked_number_indices.unsqueeze(-1).expand(-1, -1, sequence_output.size(-1))
+        print(tt.shape)
+        print(sequence_output.shape)
+        print(torch.max(masked_number_indices))
+        return 
+        encoded_numbers = torch.gather(
+		sequence_output, # [batch_size, sequence_length, hidden_size]
+               	1,
+             	tt) # [batch_size, # of numbers in the passage, encoding_dim]
+	# Get the average encoding over the entire passage
+	# [batch_size, hidden_size]
+        avg_sequence_output = torch.mean(sequence_output, 1)
+	# here we concat the avg encoding on top of BERT output
+    	# [batch_size, # of numbers in the passage, hidden_size * 2]
+        encoded_numbers = torch.cat([encoded_numbers, avg_sequence_output.unsqueeze(1).repeat(1, encoded_numbers.size(1), 1)], -1)
+        number_sign_logits = self.number_sign_nn_1(encoded_numbers)
+      	# [batch_size, # of numbers in the passage, 3]
+        number_sign_logits = self.number_sign_nn_2(number_sign_logits)
+        number_sign_log_probs = torch.nn.functional.log_softmax(number_sign_logits, -1)
+        
         # [batch_size]
         if start_positions is not None and end_positions is not None:
             # If we are on multi-GPU, split add a dimension
@@ -1301,17 +1352,38 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
 
             loss_fct_1 = CrossEntropyLoss(ignore_index=ignored_index)
             #loss_fct_2 = CrossEntropyLoss(weight=self.numbers_weights)         ## Added loss function
-            loss_fct_2 = CrossEntropyLoss(ignore_index=10)                      ## Added loss function, ignore loss for class 10
+            loss_fct_count = CrossEntropyLoss(ignore_index=-1)                      ## Added loss function, ignore loss for class -1
             start_loss_p = loss_fct_1(start_logits_p, start_positions)
             end_loss_p = loss_fct_1(end_logits_p, end_positions)
             start_loss_q = loss_fct_1(start_logits_q, start_positions_q)
             end_loss_q = loss_fct_1(end_logits_q, end_positions_q)
-            classification_loss = loss_fct_2(class_logits, answers_as_counts)   ## Added classification loss
+            count_loss = loss_fct_count(class_logits, answers_as_counts)   ## Added classification loss
 
             #hits = torch.eq(number_preds, numbers).float()                     ## added hits
             #accuracy = torch.mean(hits)                                        ## Added accuracy
 
-            total_loss = (start_loss_p + end_loss_p + start_loss_q + end_loss_q + classification_loss) / 5      ## Added classification_loss and changed denominator to 3
+            # The padded add-sub combinations use 0 as the null signs for all numbers, and we mask them here.
+            # Shape: (batch_size, # of combinations)
+            gold_add_sub_mask = (answer_as_add_sub_expressions.sum(-1) > 0).float()
+            # Shape: (batch_size, # of numbers in the passage, # of combinations)
+            gold_add_sub_signs = answer_as_add_sub_expressions.transpose(1, 2)
+            # Shape: (batch_size, # of numbers in the passage, # of combinations)
+            log_likelihood_for_number_signs = torch.gather(number_sign_log_probs, 2, gold_add_sub_signs)
+            # the log likelihood of the masked positions should be 0
+            # so that it will not affect the joint probability
+            log_likelihood_for_number_signs = \
+                utils.replace_masked_values(log_likelihood_for_number_signs, number_mask.unsqueeze(-1), 0)
+            # Shape: (batch_size, # of combinations)
+            log_likelihood_for_add_subs = log_likelihood_for_number_signs.sum(1)
+            # For those padded combinations, we set their log probabilities to be very small negative value
+            log_likelihood_for_add_subs = \
+                utils.replace_masked_values(log_likelihood_for_add_subs, gold_add_sub_mask, -1e7)
+            # Shape: (batch_size, )
+            log_marginal_likelihood_for_add_sub = utils.logsumexp(log_likelihood_for_add_subs)
+            # log_marginal_likelihood_list.append(log_marginal_likelihood_for_add_sub)
+
+            
+            total_loss = (start_loss_p + end_loss_p + start_loss_q + end_loss_q + count_loss, log_marginal_likelihood_for_add_sub) / 6      ## Added classification_loss and changed denominator to 3
             return total_loss #, classification_loss, accuracy                  ## Added all (except total_loss)
         else:
             return start_logits_p, end_logits_p, start_logits_q, end_logits_q, answers_as_counts_preds            ## added answers_as_counts_preds
