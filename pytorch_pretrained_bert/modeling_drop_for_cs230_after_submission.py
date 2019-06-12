@@ -1254,7 +1254,8 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
 
         ######## answer_as_ad_sub_expressions ########
         self.classification_3 = nn.Linear(config.hidden_size, 3)                        ### Added
-        self.classification_4 = nn.Linear(self.max_seq_length+self.add_sub_max_length, self.add_sub_max_length)  ### Added
+        #self.classification_4 = nn.Linear(self.max_seq_length+self.add_sub_max_length, self.add_sub_max_length)  ### Added
+        self.classification_4 = nn.Linear(self.max_seq_length, self.add_sub_max_length)  ### Added
 
         ######## answer_type ########
         self.classification_5 = nn.Linear(config.hidden_size*self.max_seq_length, 64)   ### Added
@@ -1281,9 +1282,10 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
         #print("answers_as_counts_preds: ", answers_as_counts_preds.size())
 
         ######## answer_as_ad_sub_expressions ########
-        answers_as_add_sub_numbers_reshaped = answers_as_add_sub_numbers.unsqueeze(-1).repeat(1,1,self.config_hidden_size)   ### added
+        #answers_as_add_sub_numbers_reshaped = answers_as_add_sub_numbers.unsqueeze(-1).repeat(1,1,self.config_hidden_size)   ### added
         #print("answers_as_add_sub_numbers: ", answers_as_add_sub_numbers.size())
-        add_sub_input = torch.cat([sequence_output, answers_as_add_sub_numbers_reshaped], 1)                                 ### added
+        #add_sub_input = torch.cat([sequence_output, answers_as_add_sub_numbers_reshaped], 1)                                 ### added
+        add_sub_input = sequence_output                                         ### added
         #print("add_sub_input: ", add_sub_input.size())
         add_sub_logits = self.classification_3(add_sub_input)                   ### Added
         #print("add_sub_logits: ", add_sub_logits.size())
@@ -1299,9 +1301,11 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
         #print("raw answers_as_add_sub_expressions_preds: ", answers_as_add_sub_expressions_preds)
         #print("answers_as_add_sub_expressions_preds: ", answers_as_add_sub_expressions_preds.size())
         #print("raw answers_as_add_sub_expressions: ", answers_as_add_sub_expressions)
+        #print("raw answers_as_add_sub_numbers: ", answers_as_add_sub_numbers)
         answers_as_add_sub_preds = torch.sum(answers_as_add_sub_expressions_preds * answers_as_add_sub_numbers, 1).long()
         #print("raw answers_as_add_sub_preds: ", answers_as_add_sub_preds)
         #print("answers_as_add_sub_preds: ", answers_as_add_sub_preds.size())
+
 
         ######## answer_type ########
         q_span = torch.zeros_like(answers_as_add_sub_preds, requires_grad=False)   ### dummy for q_span selection
@@ -1364,6 +1368,18 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
             #print("answer_as_add_sub_expressions_loss: ", answer_as_add_sub_expressions_loss)
             #print("answer_type_loss: ", answer_type_loss)
 
+            #c = torch.zeros_like(answers_as_counts)                             ### Added for analysis...
+            #t = torch.zeros_like(answer_types)
+            #c.copy_(answers_as_counts)
+            #t.copy_(answer_types)
+            #c[c==10]=20
+            #t[t==2]=4
+            #hits_signs = torch.sum(torch.abs(answers_as_add_sub_expressions_preds.long() - answers_as_add_sub_expressions.long()),1)   ### added for local testing
+            #hits_counts = torch.abs(answers_as_counts_preds.long() - c.long())                                                         ###
+            #hits_type = torch.abs(answer_type_selector.squeeze(-1).long() - t.long())
+            #print("hits_signs: ", hits_signs)
+            #print("hits_counts: ", hits_counts)
+            #print("hits_type: ", hits_type)
 
             total_loss = (start_loss + end_loss + classification_loss + answer_as_add_sub_expressions_loss + answer_type_loss) / 5   ### Added losses and changed denominator to 5
             return total_loss #, classification_loss, accuracy                  ## Added all (except total_loss)

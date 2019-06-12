@@ -712,7 +712,7 @@ def write_predictions(all_examples, all_features, all_results, n_best_size,
             if score_diff > null_score_diff_threshold:
                 #all_predictions[example.qas_id] = ""                                                  ## outcomment
                 all_predictions[example.qas_id] = str(result.alt_answer)                               ### added
-                #print("in write predictions result.answer_as_counts: ", result.answer_as_counts)      ## added
+                #print("in write predictions result.alt_answer: ", result.alt_answer)      ## added
             else:
                 all_predictions[example.qas_id] = best_non_null_entry.text
             all_nbest_json[example.qas_id] = nbest_json
@@ -1019,7 +1019,7 @@ def main():
             input_file=args.train_file, is_training=True, version_2_with_negative=args.version_2_with_negative, add_sub_max_length=args.add_sub_max_length) ### added add_sub_max_length
 
         ## Here you could truncate the examples to have a toy set for debugging:
-        #train_examples = train_examples[:200]                                                                   ## Reduce number of train examples to ????
+        #train_examples = train_examples[:10]                                                                   ## Reduce number of train examples to ????
         #print('only 400 examples for training')                                                                 ## added
 
         cached_train_features_file = args.train_file+'_count_{0}_{1}_{2}_{3}'.format(                            ## Added _count in string
@@ -1175,7 +1175,7 @@ def main():
             input_file=args.predict_file, is_training=False, version_2_with_negative=args.version_2_with_negative, add_sub_max_length=args.add_sub_max_length)  ### added add_sub_max_length
 
         ## Here you could truncate the dev set to have a toy set for debugging:
-        #eval_examples = eval_examples[:80]                                                             ## Reduce number of dev examples to ????
+        #eval_examples = eval_examples[:10]                                                             ## Reduce number of dev examples to ????
         #print('only 80 examples for evaluation')
 
         eval_features = convert_examples_to_features(
@@ -1218,7 +1218,7 @@ def main():
                 start_logits = batch_start_logits[i].detach().cpu().tolist()
                 end_logits = batch_end_logits[i].detach().cpu().tolist()
                 alt_answer = batch_alt_answers[i].detach().cpu().tolist()                         ### added
-                #print("alt_answer from model: ", alt_answer)                                     ### added
+                #print("alt_answer from model: ", alt_answer)
                 eval_feature = eval_features[example_index.item()]
                 unique_id = int(eval_feature.unique_id)
                 all_results.append(RawResult(unique_id=unique_id,
