@@ -1319,7 +1319,8 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
         #print("answer_type_selector: ", answer_type_selector.size())
         answer_types_stack = torch.stack([answers_as_counts_preds, answers_as_add_sub_preds, q_span], -1)   ### add dummy (q-span) dimension
         #print("answer_types_stack: ", answer_types_stack.size())
-        alt_answers = torch.gather(answer_types_stack, -1, answer_type_selector).squeeze(-1)                ### selected alternative answer if model predicts: is_impossible
+        alt_answers = answers_as_add_sub_preds                                                   ###!!!!!!!! test for add_sub only
+        #alt_answers = torch.gather(answer_types_stack, -1, answer_type_selector).squeeze(-1)    ###!!!!!!!! outcomment for test with add_sub only ###            ### selected alternative answer if model predicts: is_impossible
         #print("raw answer_types_stack: ", answer_types_stack)
         #print("answer_types_stack: ", answer_types_stack.size())
         #print("raw alt_answers: ", alt_answers)
@@ -1359,13 +1360,13 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
             loss_fct_4 = CrossEntropyLoss(ignore_index=2)                       ### Added loss function, ignore loss for dummy (q-span) class
             start_loss = loss_fct_1(start_logits, start_positions)
             end_loss = loss_fct_1(end_logits, end_positions)
-            classification_loss = loss_fct_2(class_logits, answers_as_counts)   ## Added classification loss
+            #classification_loss = loss_fct_2(class_logits, answers_as_counts)   ## Added classification loss               #####!!!!!! Test
             answer_as_add_sub_expressions_loss = loss_fct_3(add_sub_logits, answers_as_add_sub_expressions)    ### Added
-            answer_type_loss = loss_fct_4(answer_type_logits, answer_types)     ### Added
-            #print("start_loss: ", start_loss)
-            #print("end_loss: ", end_loss)
+            #answer_type_loss = loss_fct_4(answer_type_logits, answer_types)     ### Added                                  #####!!!!! Test
+            print("start_loss: ", start_loss)
+            print("end_loss: ", end_loss)
             #print("classification_loss: ", classification_loss)
-            #print("answer_as_add_sub_expressions_loss: ", answer_as_add_sub_expressions_loss)
+            print("answer_as_add_sub_expressions_loss: ", answer_as_add_sub_expressions_loss)
             #print("answer_type_loss: ", answer_type_loss)
 
             #c = torch.zeros_like(answers_as_counts)                             ### Added for analysis...
@@ -1381,7 +1382,8 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
             #print("hits_counts: ", hits_counts)
             #print("hits_type: ", hits_type)
 
-            total_loss = (start_loss + end_loss + classification_loss + answer_as_add_sub_expressions_loss + answer_type_loss) / 5   ### Added losses and changed denominator to 5
+            total_loss = (start_loss + end_loss + answer_as_add_sub_expressions_loss) / 3   #####!!!!!!!! Test
+            #total_loss = (start_loss + end_loss + classification_loss + answer_as_add_sub_expressions_loss + answer_type_loss) / 5   ### Added losses and changed denominator to 5
             return total_loss #, classification_loss, accuracy                  ## Added all (except total_loss)
         else:
             return start_logits, end_logits, alt_answers                        ### added alt_answers
