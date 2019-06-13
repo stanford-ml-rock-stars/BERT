@@ -1363,10 +1363,10 @@ class BertForQuestionAnswering_count(BertPreTrainedModel):                      
             #classification_loss = loss_fct_2(class_logits, answers_as_counts)   ## Added classification loss               #####!!!!!! Test
             answer_as_add_sub_expressions_loss = loss_fct_3(add_sub_logits, answers_as_add_sub_expressions)    ### Added
             #answer_type_loss = loss_fct_4(answer_type_logits, answer_types)     ### Added                                  #####!!!!! Test
-            print("start_loss: ", start_loss)
-            print("end_loss: ", end_loss)
+            #print("start_loss: ", start_loss)
+            #print("end_loss: ", end_loss)
             #print("classification_loss: ", classification_loss)
-            print("answer_as_add_sub_expressions_loss: ", answer_as_add_sub_expressions_loss)
+            #print("answer_as_add_sub_expressions_loss: ", answer_as_add_sub_expressions_loss)
             #print("answer_type_loss: ", answer_type_loss)
 
             #c = torch.zeros_like(answers_as_counts)                             ### Added for analysis...
